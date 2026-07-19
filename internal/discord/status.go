@@ -87,6 +87,27 @@ func (b *Bot) announceGameOpen(ctx context.Context, guildID string, inst bingo.I
 	}
 }
 
+// announceGameAborted tells the channel a game was ended without a winner, so
+// players know the round is over and their cards are now read-only.
+func (b *Bot) announceGameAborted(ctx context.Context, guildID string, inst bingo.Instance) {
+	settings, err := b.svc.Store().GetGuildSettings(ctx, guildID)
+	if err != nil || settings.AnnounceChannelID == "" {
+		return
+	}
+	content := fmt.Sprintf("🛑 The **%s** bingo game was aborted. No winner this round; cards are now read-only.", inst.Label())
+	allowed := &discordgo.MessageAllowedMentions{}
+	if settings.ParticipantRoleID != "" {
+		content = fmt.Sprintf("<@&%s> ", settings.ParticipantRoleID) + content
+		allowed.Roles = []string{settings.ParticipantRoleID}
+	}
+	if _, err := b.session.ChannelMessageSendComplex(settings.AnnounceChannelID, &discordgo.MessageSend{
+		Content:         content,
+		AllowedMentions: allowed,
+	}); err != nil {
+		b.log.Printf("announce game aborted: %v", err)
+	}
+}
+
 // statusComponents is the "Deal me in" button attached to a status message.
 func statusComponents(inst bingo.Instance) []discordgo.MessageComponent {
 	return []discordgo.MessageComponent{
@@ -155,6 +176,8 @@ func (b *Bot) onEvent(ctx context.Context, e events.Event) {
 	switch e.Kind {
 	case events.GameOpened:
 		b.announceGameOpen(ctx, e.GuildID, inst)
+	case events.GameAborted:
+		b.announceGameAborted(ctx, e.GuildID, inst)
 	case events.GameFinished:
 		b.celebrate(ctx, e.GuildID, inst, e.CardID)
 	}

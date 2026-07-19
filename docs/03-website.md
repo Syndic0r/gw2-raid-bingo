@@ -20,6 +20,15 @@ enforced).
 - **Game view:** instance tabs (W1-W8, HTCM), a live board, deal/toggle/CALL
   BINGO, admin new-game/abort, and a leaderboard. Confetti fires on a win.
 
+## Managing data (admins)
+
+Bingo admins get a **Manage data** button in the game view: a page listing every
+pool in two groups - the static wings/encounters and the shared pools - with all
+their squares. From there they add, edit, or remove squares and create or delete
+shared pools, with no ids to guess. Every data endpoint re-checks membership and
+the bingo-admin rule server-side, and all store queries are guild-scoped, so an
+admin of one server can never touch another server's data.
+
 ## Live updates
 
 `GET /api/guild/{id}/events?instance=w1` is a Server-Sent Events stream scoped to

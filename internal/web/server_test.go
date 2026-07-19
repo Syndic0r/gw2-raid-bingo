@@ -97,3 +97,19 @@ func TestGuildsRequiresLogin(t *testing.T) {
 		t.Fatalf("status = %d, want 401", rec.Code)
 	}
 }
+
+func TestDataEndpointRequiresAdmin(t *testing.T) {
+	s := newTestServer(t)
+	// A logged-in member who is NOT an admin (fakeResolver returns a plain member).
+	token := "tok-nonadmin"
+	if err := s.store.CreateSession(context.Background(), hashToken(token), "u1", "user", "", 9_999_999_999); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/guild/g1/data", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("non-admin data access = %d, want 403", rec.Code)
+	}
+}

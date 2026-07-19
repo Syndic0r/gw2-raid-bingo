@@ -95,6 +95,14 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/guild/{gid}/game/abort", s.handleAbortGame)
 	s.mux.HandleFunc("GET /api/guild/{gid}/events", s.handleEvents)
 
+	// Admin data management (bingo squares / pools).
+	s.mux.HandleFunc("GET /api/guild/{gid}/data", s.handleDataOverview)
+	s.mux.HandleFunc("POST /api/guild/{gid}/data/entry-add", s.handleDataEntryAdd)
+	s.mux.HandleFunc("POST /api/guild/{gid}/data/entry-edit", s.handleDataEntryEdit)
+	s.mux.HandleFunc("POST /api/guild/{gid}/data/entry-remove", s.handleDataEntryRemove)
+	s.mux.HandleFunc("POST /api/guild/{gid}/data/pool-create", s.handleDataPoolCreate)
+	s.mux.HandleFunc("POST /api/guild/{gid}/data/pool-delete", s.handleDataPoolDelete)
+
 	s.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok"))
 	})

@@ -153,6 +153,10 @@ function renderGame() {
   }
   var head = el('div', { class: 'row' });
   head.appendChild(el('h2', { text: state.guild.name }));
+  head.appendChild(el('span', { class: 'spacer' }));
+  if (state.guild.admin) {
+    head.appendChild(el('button', { class: 'btn secondary', text: 'Manage data', onclick: renderManageData }));
+  }
   app.appendChild(head);
 
   var tabs = el('div', { class: 'tabs' });
@@ -350,6 +354,139 @@ async function handleStreamEvent(ev) {
     if (window.burstConfetti) window.burstConfetti();
     setTimeout(function () { winCelebrated = false; }, 5000);
   }
+}
+
+// --- admin: manage bingo data (pools + squares) ---
+function slugify(s) {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+}
+
+async function renderManageData() {
+  closeStream();
+  clear(app);
+  var head = el('div', { class: 'row' });
+  head.appendChild(el('button', { class: 'btn secondary', text: '← Back to game', onclick: renderGame }));
+  head.appendChild(el('h2', { text: 'Manage bingo data' }));
+  app.appendChild(head);
+  var container = el('div', { attrs: { id: 'data-container' } });
+  app.appendChild(container);
+  await loadData();
+}
+
+async function loadData() {
+  var container = document.getElementById('data-container');
+  if (!container) return;
+  clear(container);
+  container.appendChild(el('p', { class: 'loading', text: 'Loading...' }));
+  var data;
+  try {
+    data = await api('GET', '/api/guild/' + state.guild.id + '/data');
+  } catch (e) {
+    clear(container); container.appendChild(el('p', { class: 'error', text: e.message })); return;
+  }
+  clear(container);
+
+  container.appendChild(el('h3', { class: 'data-group', text: 'Static pools — wings & encounters' }));
+  container.appendChild(el('p', { class: 'muted', text: "One fixed pool per instance. Its squares appear on that instance's cards." }));
+  (data.static || []).forEach(function (p) { container.appendChild(poolCard(p, false)); });
+
+  container.appendChild(el('h3', { class: 'data-group', text: 'Shared pools' }));
+  container.appendChild(el('p', { class: 'muted', text: "Mixed into every game's cards. Create as many as you like." }));
+  container.appendChild(newPoolForm());
+  (data.shared || []).forEach(function (p) { container.appendChild(poolCard(p, true)); });
+}
+
+function poolCard(p, isShared) {
+  var card = el('div', { class: 'panel pool-card' });
+  var header = el('div', { class: 'row' });
+  header.appendChild(el('strong', { text: p.name }));
+  header.appendChild(el('span', { class: 'muted', text: p.entries.length + ' squares' }));
+  header.appendChild(el('span', { class: 'spacer' }));
+  if (isShared) {
+    header.appendChild(el('button', { class: 'btn danger', text: 'Delete pool', onclick: function () { deletePool(p); } }));
+  }
+  card.appendChild(header);
+
+  var list = el('div', { class: 'entry-list' });
+  p.entries.forEach(function (e) { list.appendChild(entryRow(p, e)); });
+  card.appendChild(list);
+
+  var addRow = el('div', { class: 'row add-row' });
+  var input = el('input', { class: 'text-input', attrs: { type: 'text', placeholder: 'Add a square (emojis ok)…', maxlength: '200' } });
+  input.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') addEntry(p, input, list); });
+  addRow.appendChild(input);
+  addRow.appendChild(el('button', { class: 'btn', text: 'Add', onclick: function () { addEntry(p, input, list); } }));
+  card.appendChild(addRow);
+  return card;
+}
+
+function entryRow(p, e) {
+  var row = el('div', { class: 'entry-row' });
+  row.appendChild(el('span', { class: 'entry-text', text: e.text }));
+  row.appendChild(el('span', { class: 'spacer' }));
+  row.appendChild(el('button', { class: 'icon-btn', text: '✎', attrs: { title: 'Edit' }, onclick: function () { startEdit(p, e, row); } }));
+  row.appendChild(el('button', { class: 'icon-btn', text: '✕', attrs: { title: 'Remove' }, onclick: function () { removeEntry(e, row); } }));
+  return row;
+}
+
+function startEdit(p, e, row) {
+  clear(row);
+  var input = el('input', { class: 'text-input', attrs: { type: 'text', maxlength: '200' } });
+  input.value = e.text;
+  function finish() { row.replaceWith(entryRow(p, e)); }
+  input.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') save(); if (ev.key === 'Escape') finish(); });
+  async function save() {
+    var t = input.value.trim(); if (!t) return;
+    try { await api('POST', '/api/guild/' + state.guild.id + '/data/entry-edit', { entryId: e.id, text: t }); e.text = t; }
+    catch (err) { alert(err.message); }
+    finish();
+  }
+  row.appendChild(input);
+  row.appendChild(el('button', { class: 'btn', text: 'Save', onclick: save }));
+  row.appendChild(el('button', { class: 'btn secondary', text: 'Cancel', onclick: finish }));
+  input.focus();
+}
+
+async function addEntry(p, input, list) {
+  var t = input.value.trim(); if (!t) return;
+  try {
+    var res = await api('POST', '/api/guild/' + state.guild.id + '/data/entry-add', { poolId: p.id, text: t });
+    var e = { id: res.id, text: res.text };
+    p.entries.push(e);
+    list.appendChild(entryRow(p, e));
+    input.value = '';
+    input.focus();
+  } catch (err) { alert(err.message); }
+}
+
+async function removeEntry(e, row) {
+  try { await api('POST', '/api/guild/' + state.guild.id + '/data/entry-remove', { entryId: e.id }); row.remove(); }
+  catch (err) { alert(err.message); }
+}
+
+async function deletePool(p) {
+  if (!confirm('Delete the shared pool "' + p.name + '" and all its squares?')) return;
+  try { await api('POST', '/api/guild/' + state.guild.id + '/data/pool-delete', { poolId: p.id }); loadData(); }
+  catch (e) { alert(e.message); }
+}
+
+function newPoolForm() {
+  var form = el('div', { class: 'panel' });
+  form.appendChild(el('strong', { text: 'New shared pool' }));
+  var row = el('div', { class: 'row add-row' });
+  var name = el('input', { class: 'text-input', attrs: { type: 'text', placeholder: 'Pool name (e.g. People, Music)…', maxlength: '60' } });
+  async function create() {
+    var nm = name.value.trim(); if (!nm) return;
+    var slug = slugify(nm);
+    if (!slug) { alert('Enter a name with letters or numbers.'); return; }
+    try { await api('POST', '/api/guild/' + state.guild.id + '/data/pool-create', { slug: slug, name: nm }); loadData(); }
+    catch (e) { alert(e.message); }
+  }
+  name.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') create(); });
+  row.appendChild(name);
+  row.appendChild(el('button', { class: 'btn', text: 'Create pool', onclick: create }));
+  form.appendChild(row);
+  return form;
 }
 
 boot().catch(function (e) {

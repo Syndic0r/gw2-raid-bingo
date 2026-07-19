@@ -35,6 +35,7 @@ const (
 	cellSize    = 150
 	gridPad     = 12
 	headerH     = 44
+	leftW       = 44 // width of the left BINGO letter column
 	titleH      = 64
 	cols        = bingo.Size
 	fontRegular = 17.0
@@ -64,8 +65,8 @@ func RenderCard(opts Options) ([]byte, error) {
 		return nil, fmt.Errorf("render: parse font: %w", err)
 	}
 
-	gridW := cols*cellSize + 2*gridPad
-	width := gridW
+	gridX := gridPad + leftW // left edge of the cell grid (after the letter column)
+	width := gridX + cols*cellSize + gridPad
 	height := titleH + headerH + cols*cellSize + 2*gridPad
 
 	dc := gg.NewContext(width, height)
@@ -82,20 +83,24 @@ func RenderCard(opts Options) ([]byte, error) {
 		dc.DrawStringAnchored(opts.Subtitle, float64(width)/2, 48, 0.5, 0.5)
 	}
 
-	// Column header letters.
+	// BINGO letters across the top and down the left side, framing the card.
 	dc.SetFontFace(truetype.NewFace(font, &truetype.Options{Size: fontHeader}))
 	setColor(dc, subtleColor)
+	top := float64(titleH + headerH)
 	for c := 0; c < cols; c++ {
-		cx := float64(gridPad) + float64(c)*cellSize + cellSize/2
+		cx := float64(gridX) + float64(c)*cellSize + cellSize/2
 		dc.DrawStringAnchored(string(headerLetter[c]), cx, titleH+headerH/2, 0.5, 0.5)
+	}
+	for r := 0; r < cols; r++ {
+		ry := top + float64(r)*cellSize + cellSize/2
+		dc.DrawStringAnchored(string(headerLetter[r]), float64(gridPad)+float64(leftW)/2, ry, 0.5, 0.5)
 	}
 
 	regular := truetype.NewFace(font, &truetype.Options{Size: fontRegular})
-	top := float64(titleH + headerH)
 	for idx, cell := range opts.Cells {
 		r := idx / cols
 		c := idx % cols
-		x := float64(gridPad) + float64(c)*cellSize
+		x := float64(gridX) + float64(c)*cellSize
 		y := top + float64(r)*cellSize
 
 		switch {
