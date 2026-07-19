@@ -17,7 +17,7 @@ It uses no privileged intents.
 | `/bingo schedule [in] [at] [tz] [replace]` | Bingo admins | Schedule games to open later. Give a delay (`in:2h30m`, `1d`) or an absolute time (`at:2026-07-20 20:00`, optional `tz:Europe/Berlin`), then pick one or more instances from the multi-select. A background scheduler opens them at that time and announces it. |
 | `/bingo scheduled` | Bingo admins | List upcoming scheduled games with their ids. |
 | `/bingo unschedule id` | Bingo admins | Cancel a scheduled game by id. |
-| `/bingo-data pool-add\|add\|list\|remove\|clear\|import\|export` | Bingo admins | Manage this server's card texts. The `pool` option autocompletes every pool (static wings/encounters + shared, labeled by type), so there is no guessing a slug. `clear` empties a whole pool (with confirm); `import`/`export` move the whole data set as a JSON file. |
+| `/bingo-data pool-add\|add\|list\|remove\|clear\|import\|export` | Bingo admins | Manage this server's card texts. The `pool` option autocompletes every pool (static wings/encounters + shared, labeled by type), so there is no guessing a slug. `remove` and `clear` also use the pool dropdown - `remove` then lets you search the pool's squares by text and pick one (no ids); `clear` empties a whole pool (with confirm); `import`/`export` move the whole data set as a JSON file. |
 
 ## Scheduling
 

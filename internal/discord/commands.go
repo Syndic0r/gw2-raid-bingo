@@ -140,9 +140,16 @@ func commandDefs() []*discordgo.ApplicationCommand {
 				{
 					Type:        discordgo.ApplicationCommandOptionSubCommand,
 					Name:        "remove",
-					Description: "Remove a square by its id (from /bingo-data list)",
+					Description: "Remove a square - pick a pool, then search for the square",
 					Options: []*discordgo.ApplicationCommandOption{
-						{Type: discordgo.ApplicationCommandOptionInteger, Name: "entry_id", Description: "Square id", Required: true},
+						poolRefOption(),
+						{
+							Type:         discordgo.ApplicationCommandOptionString,
+							Name:         "square",
+							Description:  "The square to remove (type to search within the pool)",
+							Required:     true,
+							Autocomplete: true,
+						},
 					},
 				},
 				{

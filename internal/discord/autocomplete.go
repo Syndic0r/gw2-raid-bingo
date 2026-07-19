@@ -2,6 +2,7 @@ package discord
 
 import (
 	"context"
+	"strconv"
 	"strings"
 
 	"github.com/bwmarrin/discordgo"
@@ -15,11 +16,51 @@ import (
 // never has to guess a slug.
 func (b *Bot) routeAutocomplete(ctx context.Context, i *discordgo.InteractionCreate) {
 	focused := focusedOption(i.ApplicationCommandData().Options)
-	if focused == nil || focused.Name != "pool" {
+	if focused == nil {
 		b.respondAutocomplete(i, nil)
 		return
 	}
-	b.respondAutocomplete(i, b.poolChoices(ctx, i.GuildID, strings.ToLower(focused.StringValue())))
+	typed := strings.ToLower(focused.StringValue())
+	switch focused.Name {
+	case "pool":
+		b.respondAutocomplete(i, b.poolChoices(ctx, i.GuildID, typed))
+	case "square":
+		// Search the squares within the pool the user already picked.
+		_, opts := subcommand(i)
+		b.respondAutocomplete(i, b.entryChoices(ctx, i.GuildID, optString(opts, "pool"), typed))
+	default:
+		b.respondAutocomplete(i, nil)
+	}
+}
+
+// entryChoices lists the squares in a pool, filtered by the typed text; each
+// choice's value is the entry id, so removing needs no numeric guessing.
+func (b *Bot) entryChoices(ctx context.Context, guildID, poolRef, typed string) []*discordgo.ApplicationCommandOptionChoice {
+	if strings.TrimSpace(poolRef) == "" {
+		return nil // no pool chosen yet
+	}
+	pool, err := b.resolvePool(ctx, guildID, poolRef)
+	if err != nil {
+		return nil
+	}
+	entries, err := b.svc.Store().ListEntries(ctx, guildID, pool.ID, true)
+	if err != nil {
+		return nil
+	}
+	var choices []*discordgo.ApplicationCommandOptionChoice
+	for _, e := range entries {
+		if typed != "" && !strings.Contains(strings.ToLower(e.Text), typed) {
+			continue
+		}
+		choices = append(choices, &discordgo.ApplicationCommandOptionChoice{
+			Name:  truncate(e.Text, 100),
+			Value: strconv.FormatInt(e.ID, 10),
+		})
+		if len(choices) >= 25 {
+			break
+		}
+	}
+	return choices
 }
 
 // focusedOption finds the option the user is currently typing into, searching

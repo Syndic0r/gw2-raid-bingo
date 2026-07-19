@@ -40,12 +40,7 @@ func (b *Bot) handleData(ctx context.Context, i *discordgo.InteractionCreate) {
 	case "clear":
 		b.handleDataClear(ctx, i, opts, userID)
 	case "remove":
-		entryID := optInt(opts, "entry_id")
-		if err := b.svc.RemoveEntry(ctx, i.GuildID, userID, entryID); err != nil {
-			b.replyEphemeral(i, b.describeError(err))
-			return
-		}
-		b.replyEphemeralf(i, "Removed square #%d.", entryID)
+		b.handleDataRemove(ctx, i, opts, userID)
 	case "import":
 		b.handleDataImport(ctx, i, opts, userID)
 	case "export":
@@ -76,6 +71,21 @@ func (b *Bot) handleDataAdd(ctx context.Context, i *discordgo.InteractionCreate,
 		return
 	}
 	b.replyEphemeralf(i, "Added square #%d to **%s**.", entry.ID, pool.Name)
+}
+
+// handleDataRemove deletes the square chosen from the searchable dropdown. The
+// "square" value is the entry id the autocomplete supplied.
+func (b *Bot) handleDataRemove(ctx context.Context, i *discordgo.InteractionCreate, opts []*discordgo.ApplicationCommandInteractionDataOption, userID string) {
+	entryID, ok := atoi64(optString(opts, "square"))
+	if !ok {
+		b.replyEphemeral(i, "Pick a square from the dropdown - start typing to search within the pool.")
+		return
+	}
+	if err := b.svc.RemoveEntry(ctx, i.GuildID, userID, entryID); err != nil {
+		b.replyEphemeral(i, b.describeError(err))
+		return
+	}
+	b.replyEphemeral(i, "Removed that square.")
 }
 
 // handleDataClear asks to confirm emptying a whole pool, then the confirm button
