@@ -1,0 +1,29 @@
+name: Bug report
+description: Something the bot or website does wrong (bad card, missing announcement, broken button, ...)
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+      placeholder: I pressed CALL BINGO and nothing happened...
+    validations:
+      required: true
+  - type: input
+    id: where
+    attributes:
+      label: Where
+      description: In Discord (which command or button) or on the website?
+      placeholder: /bingo card, or the website board
+  - type: input
+    id: instance
+    attributes:
+      label: Which instance / game
+      description: The wing or encounter, if relevant.
+      placeholder: Wing 1
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Screenshots help a lot. Please don't include any tokens or secrets.
