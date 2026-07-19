@@ -31,6 +31,7 @@ type Config struct {
 	HTTPAddr      string // HTTP_ADDR, default 127.0.0.1:8771
 	BaseURL       string // BASE_URL, e.g. https://gw2-raid-bingo.duckdns.org (the game)
 	BotBaseURL    string // BOT_BASE_URL, e.g. https://gw2-raid-bingo-bot.duckdns.org (the landing)
+	Version       string // build version (set by main from the ldflags-stamped var, not from env)
 	SessionSecret string // SESSION_SECRET (web)
 }
 

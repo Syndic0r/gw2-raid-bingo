@@ -45,6 +45,7 @@ async function api(method, path, body) {
 async function boot() {
   state.me = await api('GET', '/api/me');
   renderAccount();
+  renderVersion();
   if (!state.me.loggedIn) { renderLanding(); return; }
   await loadGuilds();
 }
@@ -70,6 +71,11 @@ function renderAccount() {
 async function logout() {
   await fetch('/auth/logout', { method: 'POST' });
   location.href = '/';
+}
+
+function renderVersion() {
+  var el2 = document.getElementById('version');
+  if (el2 && state.me && state.me.version) el2.textContent = 'GW2 Raid Bingo ' + state.me.version;
 }
 
 // --- logged-out view: log in to play (the marketing lives on the bot site) ---
@@ -386,11 +392,17 @@ async function loadData() {
   }
   clear(container);
 
+  // Quick-jump bar - shared pools are usually the ones you're editing.
+  var jump = el('div', { class: 'row jump-bar' });
+  jump.appendChild(el('button', { class: 'btn secondary', text: '↓ Shared pools', onclick: function () { scrollToId('shared-pools'); } }));
+  jump.appendChild(el('button', { class: 'btn', text: '+ New shared pool', onclick: function () { scrollToId('new-pool-form'); focusFirstInput('new-pool-form'); } }));
+  container.appendChild(jump);
+
   container.appendChild(el('h3', { class: 'data-group', text: 'Static pools — wings & encounters' }));
   container.appendChild(el('p', { class: 'muted', text: "One fixed pool per instance. Its squares appear on that instance's cards." }));
   (data.static || []).forEach(function (p) { container.appendChild(poolCard(p, false)); });
 
-  container.appendChild(el('h3', { class: 'data-group', text: 'Shared pools' }));
+  container.appendChild(el('h3', { class: 'data-group', text: 'Shared pools', attrs: { id: 'shared-pools' } }));
   container.appendChild(el('p', { class: 'muted', text: "Mixed into every game's cards. Create as many as you like." }));
   container.appendChild(newPoolForm());
   (data.shared || []).forEach(function (p) { container.appendChild(poolCard(p, true)); });
@@ -470,8 +482,11 @@ async function deletePool(p) {
   catch (e) { alert(e.message); }
 }
 
+function scrollToId(id) { var e = document.getElementById(id); if (e) e.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+function focusFirstInput(id) { var e = document.getElementById(id); var inp = e && e.querySelector('input'); if (inp) inp.focus(); }
+
 function newPoolForm() {
-  var form = el('div', { class: 'panel' });
+  var form = el('div', { class: 'panel', attrs: { id: 'new-pool-form' } });
   form.appendChild(el('strong', { text: 'New shared pool' }));
   var row = el('div', { class: 'row add-row' });
   var name = el('input', { class: 'text-input', attrs: { type: 'text', placeholder: 'Pool name (e.g. People, Music)…', maxlength: '60' } });

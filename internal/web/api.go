@@ -28,6 +28,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		"loggedIn":     false,
 		"loginEnabled": s.cfg.RequireWeb() == nil,
 		"botUrl":       s.cfg.BotBaseURL, // the public "add the bot" landing site
+		"version":      s.cfg.Version,
 	}
 	if sess, ok := s.currentUser(r); ok {
 		resp["loggedIn"] = true

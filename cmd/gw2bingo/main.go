@@ -36,6 +36,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	cfg.Version = version // stamped at build time via -ldflags
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

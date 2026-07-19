@@ -129,6 +129,7 @@ a:hover { text-decoration: underline; }
 .leaders li:last-child { border-bottom: 0; }
 
 /* ---- manage data ---- */
+.jump-bar { position: sticky; top: 58px; z-index: 5; background: var(--bg); padding: 0.5rem 0; margin-bottom: 0.4rem; }
 .data-group { margin: 1.6rem 0 0.2rem; padding-bottom: 6px; border-bottom: 1px solid var(--border); color: var(--gold); }
 .pool-card { padding: 0.9rem 1rem; }
 .pool-card > .row:first-child { margin-bottom: 0.5rem; }
@@ -143,6 +144,8 @@ a:hover { text-decoration: underline; }
   color: var(--ink); padding: 0.5rem 0.7rem; font-size: 0.95rem; font-family: inherit;
 }
 .text-input:focus { outline: none; border-color: var(--gold-soft); }
+
+.app-footer { text-align: center; color: var(--ink-dim); font-size: 0.8rem; padding: 1.5rem 1rem 2rem; }
 
 .confetti-layer { position: fixed; inset: 0; pointer-events: none; z-index: 50; }
 
