@@ -113,3 +113,54 @@ func TestDataEndpointRequiresAdmin(t *testing.T) {
 		t.Fatalf("non-admin data access = %d, want 403", rec.Code)
 	}
 }
+
+func TestCSRFOriginCheck(t *testing.T) {
+	s := newTestServer(t)
+	s.cfg.BaseURL = "https://example.org"
+
+	// Cross-site Origin on a POST is rejected before any handler runs.
+	req := httptest.NewRequest(http.MethodPost, "/api/guild/g1/toggle", strings.NewReader("{}"))
+	req.Header.Set("Origin", "https://evil.example.com")
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("cross-origin POST = %d, want 403", rec.Code)
+	}
+
+	// Same-origin POST passes the CSRF gate (then fails auth, which is fine).
+	req = httptest.NewRequest(http.MethodPost, "/api/guild/g1/toggle", strings.NewReader("{}"))
+	req.Header.Set("Origin", "https://example.org")
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("same-origin POST = %d, want 401 (past the CSRF gate)", rec.Code)
+	}
+
+	// GETs are never origin-blocked.
+	req = httptest.NewRequest(http.MethodGet, "/api/me", nil)
+	req.Header.Set("Origin", "https://evil.example.com")
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET with foreign origin = %d, want 200", rec.Code)
+	}
+}
+
+func TestSSELimiter(t *testing.T) {
+	s := newTestServer(t)
+	for i := 0; i < maxSSEPerUser; i++ {
+		if !s.acquireSSE("u1") {
+			t.Fatalf("acquire %d should succeed", i+1)
+		}
+	}
+	if s.acquireSSE("u1") {
+		t.Fatal("acquire beyond the cap should fail")
+	}
+	if !s.acquireSSE("u2") {
+		t.Fatal("another user must not be affected")
+	}
+	s.releaseSSE("u1")
+	if !s.acquireSSE("u1") {
+		t.Fatal("acquire after release should succeed")
+	}
+}

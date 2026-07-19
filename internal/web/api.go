@@ -1,9 +1,9 @@
 package web
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/Syndic0r/gw2-raid-bingo/internal/bingo"
@@ -235,7 +235,11 @@ func (s *Server) handleNewGame(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid instance")
 		return
 	}
-	pools := s.allSharedPoolIDs(r.Context(), gid)
+	pools, err := s.svc.AllSharedPoolIDs(r.Context(), gid)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load pools")
+		return
+	}
 	game, err := s.svc.NewGame(r.Context(), gid, userID, inst, pools, body.Replace)
 	if err != nil {
 		writeServiceError(w, err)
@@ -269,18 +273,6 @@ func (s *Server) handleAbortGame(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"aborted": true})
 }
 
-func (s *Server) allSharedPoolIDs(ctx context.Context, guildID string) []int64 {
-	pools, err := s.store.ListPools(ctx, guildID, store.KindShared)
-	if err != nil {
-		return nil
-	}
-	ids := make([]int64, 0, len(pools))
-	for _, p := range pools {
-		ids = append(ids, p.ID)
-	}
-	return ids
-}
-
 // writeServiceError maps service/store errors to HTTP responses.
 func writeServiceError(w http.ResponseWriter, err error) {
 	switch {
@@ -289,7 +281,7 @@ func writeServiceError(w http.ResponseWriter, err error) {
 	case errors.Is(err, service.ErrNoAnnounceChannel):
 		writeError(w, http.StatusBadRequest, "set an announcement channel in Discord with /setup first")
 	case errors.Is(err, bingo.ErrNotEnoughEntries):
-		writeError(w, http.StatusBadRequest, "not enough squares for this instance yet (24 needed)")
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("not enough squares for this instance yet (%d needed)", bingo.FillCount))
 	case errors.Is(err, store.ErrGameNotOpen):
 		writeError(w, http.StatusConflict, "that game is not open")
 	case errors.Is(err, store.ErrGameOpen):

@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 
 	"github.com/Syndic0r/gw2-raid-bingo/internal/bingo"
 )
@@ -227,25 +226,6 @@ func (s *Store) ListEntries(ctx context.Context, guildID string, poolID int64, a
 	return s.queryEntries(ctx, q, guildID, poolID)
 }
 
-// activeEntriesForPools returns all active entries across the given pool IDs.
-func (s *Store) activeEntriesForPools(ctx context.Context, guildID string, poolIDs []int64) ([]Entry, error) {
-	if len(poolIDs) == 0 {
-		return nil, nil
-	}
-	placeholders := make([]string, len(poolIDs))
-	args := make([]any, 0, len(poolIDs)+1)
-	args = append(args, guildID)
-	for i, id := range poolIDs {
-		placeholders[i] = "?"
-		args = append(args, id)
-	}
-	q := fmt.Sprintf(
-		`SELECT id, guild_id, pool_id, text, active, created_at, updated_at
-		 FROM entries WHERE guild_id = ? AND active = 1 AND pool_id IN (%s) ORDER BY id`,
-		joinComma(placeholders))
-	return s.queryEntries(ctx, q, args...)
-}
-
 func (s *Store) queryEntries(ctx context.Context, query string, args ...any) ([]Entry, error) {
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -268,17 +248,6 @@ func toBingoEntries(entries []Entry) []bingo.Entry {
 	out := make([]bingo.Entry, len(entries))
 	for i, e := range entries {
 		out[i] = bingo.Entry{ID: e.ID, Text: e.Text}
-	}
-	return out
-}
-
-func joinComma(parts []string) string {
-	out := ""
-	for i, p := range parts {
-		if i > 0 {
-			out += ", "
-		}
-		out += p
 	}
 	return out
 }

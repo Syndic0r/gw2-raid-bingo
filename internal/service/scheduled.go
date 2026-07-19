@@ -57,7 +57,14 @@ func (s *Service) RunDueSchedules(ctx context.Context, nowUnix int64) ([]FiredSc
 	}
 	out := make([]FiredSchedule, 0, len(due))
 	for _, sched := range due {
-		pools := s.allSharedPoolIDs(ctx, sched.GuildID)
+		pools, err := s.AllSharedPoolIDs(ctx, sched.GuildID)
+		if err != nil {
+			// The schedule is already claimed; report it as skipped rather than
+			// silently opening a game with no shared pools.
+			_ = s.store.MarkScheduledSkipped(ctx, sched.ID)
+			out = append(out, FiredSchedule{Schedule: sched, Skipped: true})
+			continue
+		}
 		game, err := s.store.NewGame(ctx, sched.GuildID, sched.Instance, sched.CreatedBy, pools, sched.ReplaceOpen)
 		if err != nil {
 			if errors.Is(err, store.ErrGameOpen) {
@@ -79,16 +86,17 @@ func (s *Service) RunDueSchedules(ctx context.Context, nowUnix int64) ([]FiredSc
 	return out, nil
 }
 
-// allSharedPoolIDs returns every shared pool id for a guild (the default pool
-// selection for scheduled games).
-func (s *Service) allSharedPoolIDs(ctx context.Context, guildID string) []int64 {
+// AllSharedPoolIDs returns every shared pool id for a guild - the default pool
+// selection whenever a game is opened without an explicit choice (Discord
+// commands, the website, and the scheduler all use it).
+func (s *Service) AllSharedPoolIDs(ctx context.Context, guildID string) ([]int64, error) {
 	pools, err := s.store.ListPools(ctx, guildID, store.KindShared)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	ids := make([]int64, 0, len(pools))
 	for _, p := range pools {
 		ids = append(ids, p.ID)
 	}
-	return ids
+	return ids, nil
 }

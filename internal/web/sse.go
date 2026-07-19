@@ -15,9 +15,15 @@ import (
 // reconnect.
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	gid := r.PathValue("gid")
-	if _, ok := s.requireMember(w, r, gid); !ok {
+	userID, ok := s.requireMember(w, r, gid)
+	if !ok {
 		return
 	}
+	if !s.acquireSSE(userID) {
+		writeError(w, http.StatusTooManyRequests, "too many live connections - close another tab")
+		return
+	}
+	defer s.releaseSSE(userID)
 	inst, err := bingo.ParseInstance(r.URL.Query().Get("instance"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid instance")

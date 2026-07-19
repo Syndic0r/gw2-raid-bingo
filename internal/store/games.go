@@ -2,10 +2,14 @@ package store
 
 import (
 	"context"
+	crand "crypto/rand"
 	"database/sql"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"math/rand"
+	"strings"
+	"time"
 
 	"github.com/Syndic0r/gw2-raid-bingo/internal/bingo"
 )
@@ -282,7 +286,7 @@ func (s *Store) GetOrDealCard(ctx context.Context, guildID string, gameID int64,
 	}
 
 	if r == nil {
-		r = rand.New(rand.NewSource(deriveSeed(gameID, userID)))
+		r = rand.New(rand.NewSource(cryptoSeed()))
 	}
 	card, err := bingo.GenerateCard(toBingoEntries(instEntries), toBingoEntries(sharedEntries), r)
 	if err != nil {
@@ -560,7 +564,7 @@ func (s *Store) entriesForPoolsTx(ctx context.Context, tx *sql.Tx, guildID strin
 		args = append(args, id)
 	}
 	q := `SELECT id, guild_id, pool_id, text, active, created_at, updated_at
-	      FROM entries WHERE guild_id = ? AND active = 1 AND pool_id IN (` + joinComma(placeholders) + `) ORDER BY id`
+	      FROM entries WHERE guild_id = ? AND active = 1 AND pool_id IN (` + strings.Join(placeholders, ", ") + `) ORDER BY id`
 	rows, err := tx.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
@@ -584,17 +588,16 @@ func boolInt(b bool) int {
 	return 0
 }
 
-// deriveSeed builds a deterministic-but-varied seed for a (game, user) pair so a
-// missing RNG still yields different cards per player without time-based entropy.
-func deriveSeed(gameID int64, userID string) int64 {
-	h := int64(1469598103934665603) // FNV-1a offset basis
-	mix := func(v int64) {
-		h ^= v
-		h *= 1099511628211
+// cryptoSeed seeds the dealing RNG from crypto/rand so a player cannot predict
+// their card layout in advance (the previous seed was derived from the game and
+// user ids, which are both visible). Tests keep determinism by passing their own
+// *rand.Rand.
+func cryptoSeed() int64 {
+	var b [8]byte
+	if _, err := crand.Read(b[:]); err != nil {
+		// crypto/rand failing is effectively fatal elsewhere; fall back to a
+		// unique-ish value rather than a constant.
+		return int64(time.Now().UnixNano())
 	}
-	mix(gameID)
-	for _, b := range []byte(userID) {
-		mix(int64(b))
-	}
-	return h
+	return int64(binary.LittleEndian.Uint64(b[:]))
 }

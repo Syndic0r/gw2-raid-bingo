@@ -1,8 +1,8 @@
 # Architecture
 
-The service is one Go binary (`app/cmd/gw2bingo`) that will run both the Discord
-bot and the web server over a shared store. The packages below are the phase-2
-core; the bot and web layers are added on top of them.
+The service is one Go binary (`app/cmd/gw2bingo`) that runs both the Discord bot
+and the web server over a shared store. The packages below are the core; the bot
+(`internal/discord`) and web (`internal/web`) layers sit on top of them.
 
 ## Packages (`app/internal/`)
 
@@ -40,8 +40,8 @@ guild-scoped. Highlights:
 ### `events`
 A small in-process publish/subscribe hub. Every state change is published once
 and fanned out to interested subscribers: the Discord live-message updater
-(global subscription) and, later, the web server's SSE connections (per-instance
-topics). Delivery is non-blocking so a slow subscriber never stalls a game.
+(global subscription) and the web server's SSE connections (per-instance topics).
+Delivery is non-blocking so a slow subscriber never stalls a game.
 
 ### `config`
 Runtime configuration loaded from the environment (a systemd EnvironmentFile on
@@ -53,8 +53,8 @@ in `golang.org/x/image` (no font file shipped).
 
 ### `service`
 The shared application layer over the store and event hub. Every game action the
-bot and (later) the web server perform goes through here, so the single
-bingo-admin rule and event publishing are enforced in one place. Role resolution
+bot and the web server perform goes through here, so the single bingo-admin rule
+and event publishing are enforced in one place. Role resolution
 is injected (`RoleResolver`), implemented over the Discord REST API in
 production and faked in tests.
 

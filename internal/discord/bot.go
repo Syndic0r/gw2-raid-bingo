@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"runtime/debug"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -98,14 +99,30 @@ func (b *Bot) registerCommands() error {
 	return nil
 }
 
+// recoverGuard turns a panic in a bot goroutine into a logged error instead of
+// a process exit. discordgo dispatches every handler in its own goroutine, and
+// the event bridge and scheduler run in theirs, so without this a single panic
+// anywhere in the handler tree would take down the bot AND the co-hosted web
+// server for every guild at once.
+func (b *Bot) recoverGuard(what string) {
+	if r := recover(); r != nil {
+		b.log.Printf("PANIC in %s: %v\n%s", what, r, debug.Stack())
+	}
+}
+
 // onInteraction is the top-level router.
 func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	defer b.recoverGuard("interaction handler")
 	// Every interaction we handle happens inside a guild.
 	if i.GuildID == "" {
 		b.replyEphemeral(i, "This bot only works inside a server.")
 		return
 	}
-	ctx := context.Background()
+	// Bound each interaction so a hung Discord REST call or DB access cannot pin
+	// a handler goroutine forever (Discord itself gives up on the response long
+	// before this).
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	// Make sure the guild exists in our store before any action.
 	if err := b.svc.Store().EnsureGuild(ctx, i.GuildID); err != nil {
 		b.log.Printf("ensure guild %s: %v", i.GuildID, err)

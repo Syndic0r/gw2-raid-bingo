@@ -109,8 +109,17 @@ func optInt(opts []*discordgo.ApplicationCommandInteractionDataOption, name stri
 func optAttachment(i *discordgo.InteractionCreate, opts []*discordgo.ApplicationCommandInteractionDataOption, name string) *discordgo.MessageAttachment {
 	for _, o := range opts {
 		if o.Name == name && o.Type == discordgo.ApplicationCommandOptionAttachment {
-			id := o.Value.(string)
-			return i.ApplicationCommandData().Resolved.Attachments[id]
+			// comma-ok: a malformed payload must not panic (a panic in a
+			// discordgo handler would take the whole process down).
+			id, ok := o.Value.(string)
+			if !ok {
+				return nil
+			}
+			resolved := i.ApplicationCommandData().Resolved
+			if resolved == nil {
+				return nil
+			}
+			return resolved.Attachments[id]
 		}
 	}
 	return nil

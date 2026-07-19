@@ -9,7 +9,7 @@ DISCORD_APP_ID=
 # Leave empty in production to register globally.
 DISCORD_DEV_GUILD_ID=
 
-# --- Discord OAuth (required for the website, phase 5) ---
+# --- Discord OAuth (required for the website) ---
 DISCORD_CLIENT_SECRET=
 
 # --- Data ---
@@ -19,10 +19,9 @@ DB_PATH=/opt/gw2-raid-bingo/data/bingo.db
 SEED_FILE=/opt/gw2-raid-bingo/seed/entries.json
 SEED_GUILD_ID=1098188107708371015
 
-# --- Web (phase 5) ---
+# --- Web ---
 HTTP_ADDR=127.0.0.1:8771
 BASE_URL=https://gw2-raid-bingo.duckdns.org
 # Public "add the bot" landing site (separate static site). The game app links to
 # it from its logged-out screen. Optional.
 BOT_BASE_URL=https://gw2-raid-bingo-bot.duckdns.org
-SESSION_SECRET=

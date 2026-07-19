@@ -52,11 +52,3 @@ func (s *Store) GetTrackedMessage(ctx context.Context, guildID string, inst bing
 	m.Instance = bingo.Instance(inststr)
 	return m, nil
 }
-
-// DeleteTrackedMessage removes a tracked message record.
-func (s *Store) DeleteTrackedMessage(ctx context.Context, guildID string, inst bingo.Instance, kind string) error {
-	_, err := s.db.ExecContext(ctx,
-		`DELETE FROM tracked_messages WHERE guild_id = ? AND instance = ? AND kind = ?`,
-		guildID, string(inst), kind)
-	return err
-}

@@ -62,7 +62,11 @@ func (b *Bot) handleNew(ctx context.Context, i *discordgo.InteractionCreate, opt
 		return
 	}
 	replace := optBool(opts, "replace")
-	poolIDs := b.allSharedPoolIDs(ctx, i.GuildID)
+	poolIDs, err := b.svc.AllSharedPoolIDs(ctx, i.GuildID)
+	if err != nil {
+		b.replyEphemeral(i, b.describeError(err))
+		return
+	}
 
 	game, err := b.svc.NewGame(ctx, i.GuildID, interactionUserID(i), inst, poolIDs, replace)
 	if errors.Is(err, store.ErrGameOpen) {
@@ -140,11 +144,7 @@ func (b *Bot) handlePost(ctx context.Context, i *discordgo.InteractionCreate, op
 	if !ok {
 		return
 	}
-	if admin, err := b.svc.IsAdmin(ctx, i.GuildID, interactionUserID(i)); err != nil {
-		b.replyEphemeral(i, b.describeError(err))
-		return
-	} else if !admin {
-		b.replyEphemeral(i, "Only bingo admins can post the game status message.")
+	if !b.requireBingoAdmin(ctx, i, "Only bingo admins can post the game status message.") {
 		return
 	}
 	stats, err := b.svc.GameStatsForInstance(ctx, i.GuildID, inst)
@@ -172,11 +172,7 @@ func (b *Bot) handleInspect(ctx context.Context, i *discordgo.InteractionCreate,
 	if !ok {
 		return
 	}
-	if admin, err := b.svc.IsAdmin(ctx, i.GuildID, interactionUserID(i)); err != nil {
-		b.replyEphemeral(i, b.describeError(err))
-		return
-	} else if !admin {
-		b.replyEphemeral(i, "Only bingo admins can inspect players' cards.")
+	if !b.requireBingoAdmin(ctx, i, "Only bingo admins can inspect players' cards.") {
 		return
 	}
 	stats, err := b.svc.GameStatsForInstance(ctx, i.GuildID, inst)
@@ -214,6 +210,23 @@ func (b *Bot) handleInspect(ctx context.Context, i *discordgo.InteractionCreate,
 	})
 }
 
+// requireBingoAdmin verifies the acting user is a bingo admin, replying with a
+// describeError on lookup failure or with deniedMsg when they are not, and
+// returning false in both cases. It is the single admin gate shared by the data
+// and game-management commands (the sibling ensureCanConfigure guards /setup).
+func (b *Bot) requireBingoAdmin(ctx context.Context, i *discordgo.InteractionCreate, deniedMsg string) bool {
+	admin, err := b.svc.IsAdmin(ctx, i.GuildID, interactionUserID(i))
+	if err != nil {
+		b.replyEphemeral(i, b.describeError(err))
+		return false
+	}
+	if !admin {
+		b.replyEphemeral(i, deniedMsg)
+		return false
+	}
+	return true
+}
+
 // describeError maps internal errors to friendly, user-facing text.
 func (b *Bot) describeError(err error) string {
 	switch {
@@ -222,7 +235,7 @@ func (b *Bot) describeError(err error) string {
 	case errors.Is(err, service.ErrNoAnnounceChannel):
 		return "Set an announcement channel first with `/setup` - that is where win celebrations are posted. Games can then be started from any channel."
 	case errors.Is(err, bingo.ErrNotEnoughEntries):
-		return "This instance does not have enough squares yet (24 are needed). A bingo admin can add more with `/bingo-data add`."
+		return fmt.Sprintf("This instance does not have enough squares yet (%d are needed). A bingo admin can add more with `/bingo-data add`.", bingo.FillCount)
 	case errors.Is(err, store.ErrGameNotOpen):
 		return "That game is not open."
 	case errors.Is(err, store.ErrGameOpen):

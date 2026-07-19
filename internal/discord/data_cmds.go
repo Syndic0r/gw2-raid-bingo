@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -38,7 +39,7 @@ func (b *Bot) handleData(ctx context.Context, i *discordgo.InteractionCreate) {
 	case "list":
 		b.handleDataList(ctx, i, opts)
 	case "clear":
-		b.handleDataClear(ctx, i, opts, userID)
+		b.handleDataClear(ctx, i, opts)
 	case "remove":
 		b.handleDataRemove(ctx, i, opts, userID)
 	case "import":
@@ -90,9 +91,8 @@ func (b *Bot) handleDataRemove(ctx context.Context, i *discordgo.InteractionCrea
 
 // handleDataClear asks to confirm emptying a whole pool, then the confirm button
 // (handleClearPool) does it.
-func (b *Bot) handleDataClear(ctx context.Context, i *discordgo.InteractionCreate, opts []*discordgo.ApplicationCommandInteractionDataOption, userID string) {
-	if admin, err := b.svc.IsAdmin(ctx, i.GuildID, userID); err != nil || !admin {
-		b.replyEphemeral(i, "Only bingo admins can clear a pool.")
+func (b *Bot) handleDataClear(ctx context.Context, i *discordgo.InteractionCreate, opts []*discordgo.ApplicationCommandInteractionDataOption) {
+	if !b.requireBingoAdmin(ctx, i, "Only bingo admins can clear a pool.") {
 		return
 	}
 	pool, err := b.resolvePool(ctx, i.GuildID, optString(opts, "pool"))
@@ -121,6 +121,11 @@ func (b *Bot) handleDataClear(ctx context.Context, i *discordgo.InteractionCreat
 }
 
 func (b *Bot) handleDataList(ctx context.Context, i *discordgo.InteractionCreate, opts []*discordgo.ApplicationCommandInteractionDataOption) {
+	// /bingo-data manages a guild's square library; reading it is admin-only like
+	// every other subcommand in the group (players see squares on dealt cards).
+	if !b.requireBingoAdmin(ctx, i, "Only bingo admins can view pool data.") {
+		return
+	}
 	pool, err := b.resolvePool(ctx, i.GuildID, optString(opts, "pool"))
 	if err != nil {
 		b.replyEphemeral(i, "No such pool.")
@@ -155,8 +160,13 @@ func (b *Bot) handleDataImport(ctx context.Context, i *discordgo.InteractionCrea
 		return
 	}
 	// Verify permission before downloading anything.
-	if admin, err := b.svc.IsAdmin(ctx, i.GuildID, userID); err != nil || !admin {
-		b.replyEphemeral(i, "Only bingo admins can import data.")
+	if !b.requireBingoAdmin(ctx, i, "Only bingo admins can import data.") {
+		return
+	}
+	// Only fetch from Discord's CDN: the URL rides in the interaction payload,
+	// and the bot must never be usable as a proxy to arbitrary hosts (SSRF).
+	if !isDiscordCDNURL(att.URL) {
+		b.replyEphemeral(i, "That attachment URL is not a Discord CDN URL.")
 		return
 	}
 	data, err := b.download(ctx, att.URL, maxImportBytes)
@@ -178,6 +188,9 @@ func (b *Bot) handleDataImport(ctx context.Context, i *discordgo.InteractionCrea
 }
 
 func (b *Bot) handleDataExport(ctx context.Context, i *discordgo.InteractionCreate) {
+	if !b.requireBingoAdmin(ctx, i, "Only bingo admins can export pool data.") {
+		return
+	}
 	out := store.SeedData{
 		Instance: map[string][]string{},
 		Shared:   map[string][]string{},
@@ -215,6 +228,16 @@ func (b *Bot) handleDataExport(ctx context.Context, i *discordgo.InteractionCrea
 		Content: "Here is this server's bingo data. Re-import it with `/bingo-data import`.",
 		Files:   []*discordgo.File{fileFromBytes("bingo-data.json", "application/json", payload)},
 	})
+}
+
+// isDiscordCDNURL reports whether u is an https URL on Discord's CDN hosts.
+func isDiscordCDNURL(u string) bool {
+	parsed, err := url.Parse(u)
+	if err != nil || parsed.Scheme != "https" {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	return host == "cdn.discordapp.com" || host == "media.discordapp.net"
 }
 
 // download fetches up to limit bytes from an attachment URL.

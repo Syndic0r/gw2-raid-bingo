@@ -28,11 +28,10 @@ type Config struct {
 	SeedGuildID string // SEED_GUILD_ID
 
 	// Web (used in phase 5; parsed now so config stays one type).
-	HTTPAddr      string // HTTP_ADDR, default 127.0.0.1:8771
-	BaseURL       string // BASE_URL, e.g. https://gw2-raid-bingo.duckdns.org (the game)
-	BotBaseURL    string // BOT_BASE_URL, e.g. https://gw2-raid-bingo-bot.duckdns.org (the landing)
-	Version       string // build version (set by main from the ldflags-stamped var, not from env)
-	SessionSecret string // SESSION_SECRET (web)
+	HTTPAddr   string // HTTP_ADDR, default 127.0.0.1:8771
+	BaseURL    string // BASE_URL, e.g. https://gw2-raid-bingo.duckdns.org (the game)
+	BotBaseURL string // BOT_BASE_URL, e.g. https://gw2-raid-bingo-bot.duckdns.org (the landing)
+	Version    string // build version (set by main from the ldflags-stamped var, not from env)
 }
 
 // Getenv is the environment lookup, overridable in tests.
@@ -44,17 +43,16 @@ func Load() (Config, error) { return LoadFrom(os.Getenv) }
 // LoadFrom resolves configuration using the provided lookup.
 func LoadFrom(get Getenv) (Config, error) {
 	c := Config{
-		BotToken:      strings.TrimSpace(get("DISCORD_BOT_TOKEN")),
-		AppID:         strings.TrimSpace(get("DISCORD_APP_ID")),
-		ClientSecret:  strings.TrimSpace(get("DISCORD_CLIENT_SECRET")),
-		DevGuildID:    strings.TrimSpace(get("DISCORD_DEV_GUILD_ID")),
-		DBPath:        strings.TrimSpace(get("DB_PATH")),
-		SeedFile:      strings.TrimSpace(get("SEED_FILE")),
-		SeedGuildID:   strings.TrimSpace(get("SEED_GUILD_ID")),
-		HTTPAddr:      strings.TrimSpace(get("HTTP_ADDR")),
-		BaseURL:       strings.TrimRight(strings.TrimSpace(get("BASE_URL")), "/"),
-		BotBaseURL:    strings.TrimRight(strings.TrimSpace(get("BOT_BASE_URL")), "/"),
-		SessionSecret: strings.TrimSpace(get("SESSION_SECRET")),
+		BotToken:     strings.TrimSpace(get("DISCORD_BOT_TOKEN")),
+		AppID:        strings.TrimSpace(get("DISCORD_APP_ID")),
+		ClientSecret: strings.TrimSpace(get("DISCORD_CLIENT_SECRET")),
+		DevGuildID:   strings.TrimSpace(get("DISCORD_DEV_GUILD_ID")),
+		DBPath:       strings.TrimSpace(get("DB_PATH")),
+		SeedFile:     strings.TrimSpace(get("SEED_FILE")),
+		SeedGuildID:  strings.TrimSpace(get("SEED_GUILD_ID")),
+		HTTPAddr:     strings.TrimSpace(get("HTTP_ADDR")),
+		BaseURL:      strings.TrimRight(strings.TrimSpace(get("BASE_URL")), "/"),
+		BotBaseURL:   strings.TrimRight(strings.TrimSpace(get("BOT_BASE_URL")), "/"),
 	}
 	if c.SeedGuildID == "" {
 		c.SeedGuildID = DefaultSeedGuildID
@@ -94,9 +92,6 @@ func (c Config) RequireWeb() error {
 	}
 	if c.BaseURL == "" {
 		missing = append(missing, "BASE_URL")
-	}
-	if c.SessionSecret == "" {
-		missing = append(missing, "SESSION_SECRET")
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("missing required web config: %s", strings.Join(missing, ", "))

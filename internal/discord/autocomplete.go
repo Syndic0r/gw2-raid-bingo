@@ -4,6 +4,7 @@ import (
 	"context"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/bwmarrin/discordgo"
 
@@ -114,9 +115,12 @@ func (b *Bot) respondAutocomplete(i *discordgo.InteractionCreate, choices []*dis
 	}
 }
 
+// truncate shortens s to at most n runes (not bytes), so a multi-byte character
+// is never split into invalid UTF-8, which Discord would reject.
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	if utf8.RuneCountInString(s) <= n {
 		return s
 	}
-	return s[:n-1] + "…"
+	runes := []rune(s)
+	return string(runes[:n-1]) + "…"
 }

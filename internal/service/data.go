@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/Syndic0r/gw2-raid-bingo/internal/bingo"
 	"github.com/Syndic0r/gw2-raid-bingo/internal/store"
@@ -92,7 +91,7 @@ func (s *Service) ImportData(ctx context.Context, guildID, userID string, d stor
 	for slug, texts := range d.Shared {
 		pool, err := s.store.GetPool(ctx, guildID, store.KindShared, slug)
 		if err == store.ErrNotFound {
-			pool, err = s.store.CreateSharedPool(ctx, guildID, slug, seedName(slug))
+			pool, err = s.store.CreateSharedPool(ctx, guildID, slug, store.TitleCaseSlug(slug))
 			if err == nil {
 				res.PoolsMade++
 			}
@@ -116,12 +115,4 @@ func (s *Service) importInto(ctx context.Context, guildID string, poolID int64, 
 		}
 		res.Inserted++
 	}
-}
-
-// seedName turns a slug like "general" into a display name "General".
-func seedName(slug string) string {
-	if slug == "" {
-		return slug
-	}
-	return strings.ToUpper(slug[:1]) + slug[1:]
 }

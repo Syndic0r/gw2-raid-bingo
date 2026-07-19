@@ -190,7 +190,6 @@ async function loadBoard() {
   renderBoard();
 }
 
-var lastWinShown = false;
 function renderBoard() {
   var container = document.getElementById('board-container');
   if (!container) return;

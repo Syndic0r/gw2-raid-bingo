@@ -16,11 +16,7 @@ import (
 // so one schedule can open several instances at once. The resolved fire time is
 // carried in the select's custom id, keeping the flow stateless.
 func (b *Bot) handleSchedule(ctx context.Context, i *discordgo.InteractionCreate, opts []*discordgo.ApplicationCommandInteractionDataOption) {
-	if admin, err := b.svc.IsAdmin(ctx, i.GuildID, interactionUserID(i)); err != nil {
-		b.replyEphemeral(i, b.describeError(err))
-		return
-	} else if !admin {
-		b.replyEphemeral(i, "Only bingo admins can schedule games.")
+	if !b.requireBingoAdmin(ctx, i, "Only bingo admins can schedule games.") {
 		return
 	}
 
@@ -147,7 +143,10 @@ func (b *Bot) startScheduler(ctx context.Context, interval time.Duration) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				b.runDueSchedules(ctx)
+				func() {
+					defer b.recoverGuard("scheduler tick")
+					b.runDueSchedules(ctx)
+				}()
 			}
 		}
 	}()

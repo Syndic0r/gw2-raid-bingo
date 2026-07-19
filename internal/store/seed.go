@@ -74,7 +74,7 @@ func (s *Store) ApplySeed(ctx context.Context, guildID string, d SeedData) (int,
 	for slug, texts := range d.Shared {
 		pool, err := s.GetPool(ctx, guildID, KindShared, slug)
 		if err == ErrNotFound {
-			pool, err = s.CreateSharedPool(ctx, guildID, slug, seedPoolName(slug))
+			pool, err = s.CreateSharedPool(ctx, guildID, slug, TitleCaseSlug(slug))
 		}
 		if err != nil {
 			return inserted, fmt.Errorf("seed shared pool %q: %w", slug, err)
@@ -111,8 +111,10 @@ func (s *Store) seedPoolIfEmpty(ctx context.Context, guildID string, poolID int6
 	return n, nil
 }
 
-// seedPoolName turns a slug like "general" into a display name "General".
-func seedPoolName(slug string) string {
+// TitleCaseSlug turns a slug like "general" into a display name "General". It is
+// the single default-name derivation shared by seeding here and by the service's
+// auto-pool creation.
+func TitleCaseSlug(slug string) string {
 	if slug == "" {
 		return slug
 	}

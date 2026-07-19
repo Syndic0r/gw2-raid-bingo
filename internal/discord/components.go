@@ -116,7 +116,11 @@ func (b *Bot) handleNewReplace(ctx context.Context, i *discordgo.InteractionCrea
 		b.replyEphemeral(i, "Invalid instance.")
 		return
 	}
-	poolIDs := b.allSharedPoolIDs(ctx, i.GuildID)
+	poolIDs, err := b.svc.AllSharedPoolIDs(ctx, i.GuildID)
+	if err != nil {
+		b.ackEphemeralEdit(i, b.describeError(err))
+		return
+	}
 	game, err := b.svc.NewGame(ctx, i.GuildID, interactionUserID(i), inst, poolIDs, true)
 	if err != nil {
 		b.ackEphemeralEdit(i, b.describeError(err))
@@ -142,8 +146,7 @@ func (b *Bot) handleAbortConfirm(ctx context.Context, i *discordgo.InteractionCr
 }
 
 func (b *Bot) handleInspectSelect(ctx context.Context, i *discordgo.InteractionCreate, id string) {
-	if admin, err := b.svc.IsAdmin(ctx, i.GuildID, interactionUserID(i)); err != nil || !admin {
-		b.replyEphemeral(i, "Only bingo admins can inspect cards.")
+	if !b.requireBingoAdmin(ctx, i, "Only bingo admins can inspect cards.") {
 		return
 	}
 	values := i.MessageComponentData().Values
@@ -163,9 +166,11 @@ func (b *Bot) handleInspectSelect(ctx context.Context, i *discordgo.InteractionC
 	}
 	// Acknowledge the select without changing it, then show the card as a
 	// separate ephemeral image so the picker stays usable.
-	_ = b.session.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+	if err := b.session.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseDeferredMessageUpdate,
-	})
+	}); err != nil {
+		b.log.Printf("inspect ack: %v", err)
+	}
 	view := cardView{title: fmt.Sprintf("Card #%d", cardID), subtitle: "read-only", card: card, readOnly: true}
 	data, err := view.responseData()
 	if err != nil {

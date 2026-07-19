@@ -13,22 +13,6 @@ import (
 	"github.com/Syndic0r/gw2-raid-bingo/internal/store"
 )
 
-// allSharedPoolIDs returns every shared pool id for a guild, used as the default
-// pool selection when opening a game from Discord (fine-grained selection is a
-// website feature).
-func (b *Bot) allSharedPoolIDs(ctx context.Context, guildID string) []int64 {
-	pools, err := b.svc.Store().ListPools(ctx, guildID, store.KindShared)
-	if err != nil {
-		b.log.Printf("list shared pools: %v", err)
-		return nil
-	}
-	ids := make([]int64, 0, len(pools))
-	for _, p := range pools {
-		ids = append(ids, p.ID)
-	}
-	return ids
-}
-
 // statusEmbed renders a game's live status as an embed.
 func (b *Bot) statusEmbed(stats service.GameStats) *discordgo.MessageEmbed {
 	inst := stats.Game.Instance
@@ -159,7 +143,10 @@ func (b *Bot) startEventBridge(ctx context.Context) {
 				if !ok {
 					return
 				}
-				b.onEvent(ctx, e)
+				func() {
+					defer b.recoverGuard("event bridge")
+					b.onEvent(ctx, e)
+				}()
 			}
 		}
 	}()

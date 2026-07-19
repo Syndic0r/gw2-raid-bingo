@@ -52,7 +52,7 @@ reconnects automatically.
 
 ## Configuration
 
-Web mode activates when `DISCORD_APP_ID`, `DISCORD_CLIENT_SECRET`, `BASE_URL`,
-and `SESSION_SECRET` are all set (see `gw2-raid-bingo.conf.example`); otherwise
+Web mode activates when `DISCORD_APP_ID`, `DISCORD_CLIENT_SECRET`, and
+`BASE_URL` are all set (see `gw2-raid-bingo.conf.example`); otherwise
 the bot runs standalone. The OAuth redirect URI is `BASE_URL` + `/auth/callback`,
 which must be registered on the Discord application.

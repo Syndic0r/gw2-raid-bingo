@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Syndic0r/gw2-raid-bingo/internal/config"
@@ -43,7 +44,16 @@ type Server struct {
 	log           *log.Logger
 	mux           *http.ServeMux
 	secureCookies bool
+
+	// sseCount tracks live event-stream connections per user so one account
+	// cannot exhaust the server with idle streams.
+	sseMu    sync.Mutex
+	sseCount map[string]int
 }
+
+// maxSSEPerUser caps concurrent event streams per logged-in user. A player
+// legitimately needs one per open tab; eight leaves headroom.
+const maxSSEPerUser = 8
 
 // NewServer builds the web server.
 func NewServer(cfg config.Config, svc *service.Service, hub *events.Hub, bot BotPresence, logger *log.Logger) *Server {
@@ -57,6 +67,7 @@ func NewServer(cfg config.Config, svc *service.Service, hub *events.Hub, bot Bot
 		log:           logger,
 		mux:           http.NewServeMux(),
 		secureCookies: strings.HasPrefix(cfg.BaseURL, "https://"),
+		sseCount:      make(map[string]int),
 	}
 	s.routes()
 	return s
@@ -108,9 +119,9 @@ func (s *Server) routes() {
 	})
 }
 
-// Handler returns the http.Handler with security headers applied.
+// Handler returns the http.Handler with the security middleware applied.
 func (s *Server) Handler() http.Handler {
-	return s.securityHeaders(s.mux)
+	return s.securityHeaders(s.csrfOriginCheck(s.mux))
 }
 
 // Run starts the HTTP server and blocks until ctx is cancelled, then shuts down.
@@ -119,6 +130,9 @@ func (s *Server) Run(ctx context.Context) error {
 		Addr:              s.cfg.HTTPAddr,
 		Handler:           s.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
+		// No WriteTimeout: it would kill long-lived SSE streams. IdleTimeout only
+		// bounds keep-alive connections BETWEEN requests, so it is SSE-safe.
+		IdleTimeout: 2 * time.Minute,
 	}
 	go s.purgeSessionsLoop(ctx)
 
@@ -149,6 +163,50 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("Referrer-Policy", "same-origin")
 		next.ServeHTTP(w, r)
 	})
+}
+
+// csrfOriginCheck rejects state-changing requests whose Origin header names a
+// DIFFERENT site. Defense in depth on top of the SameSite cookie: modern
+// browsers always send Origin on cross-site POSTs, so a forged request from
+// another page is refused even if a cookie were somehow attached. Requests
+// without an Origin header (curl, tests, same-origin GETs) pass through.
+func (s *Server) csrfOriginCheck(next http.Handler) http.Handler {
+	expected := s.cfg.BaseURL // already scheme://host with no trailing slash
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet, http.MethodHead, http.MethodOptions:
+			next.ServeHTTP(w, r)
+			return
+		}
+		if expected != "" {
+			if origin := r.Header.Get("Origin"); origin != "" && !strings.EqualFold(origin, expected) {
+				writeError(w, http.StatusForbidden, "cross-origin request rejected")
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// acquireSSE reserves an event-stream slot for a user; releaseSSE frees it.
+func (s *Server) acquireSSE(userID string) bool {
+	s.sseMu.Lock()
+	defer s.sseMu.Unlock()
+	if s.sseCount[userID] >= maxSSEPerUser {
+		return false
+	}
+	s.sseCount[userID]++
+	return true
+}
+
+func (s *Server) releaseSSE(userID string) {
+	s.sseMu.Lock()
+	defer s.sseMu.Unlock()
+	if s.sseCount[userID] <= 1 {
+		delete(s.sseCount, userID)
+	} else {
+		s.sseCount[userID]--
+	}
 }
 
 func (s *Server) purgeSessionsLoop(ctx context.Context) {

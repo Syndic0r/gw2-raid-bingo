@@ -35,14 +35,15 @@ func newOAuthClient(clientID, clientSecret, redirectURI string) *oauthClient {
 	}
 }
 
-// authCodeURL builds the authorize URL for the identify+guilds scopes with a
-// PKCE challenge derived from verifier.
+// authCodeURL builds the authorize URL for the identify scope with a PKCE
+// challenge derived from verifier. The guild picker is built from the bot's own
+// membership (see handleGuilds), so the guilds scope is not requested.
 func (c *oauthClient) authCodeURL(state, verifier string) string {
 	challenge := pkceChallenge(verifier)
 	q := url.Values{
 		"client_id":             {c.clientID},
 		"response_type":         {"code"},
-		"scope":                 {"identify guilds"},
+		"scope":                 {"identify"},
 		"redirect_uri":          {c.redirectURI},
 		"state":                 {state},
 		"code_challenge":        {challenge},
@@ -95,23 +96,10 @@ type DiscordUser struct {
 	Avatar   string `json:"avatar"`
 }
 
-// UserGuild is the subset of /users/@me/guilds we use.
-type UserGuild struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Icon string `json:"icon"`
-}
-
 func (c *oauthClient) me(ctx context.Context, accessToken string) (DiscordUser, error) {
 	var u DiscordUser
 	err := c.get(ctx, accessToken, "/users/@me", &u)
 	return u, err
-}
-
-func (c *oauthClient) myGuilds(ctx context.Context, accessToken string) ([]UserGuild, error) {
-	var g []UserGuild
-	err := c.get(ctx, accessToken, "/users/@me/guilds", &g)
-	return g, err
 }
 
 func (c *oauthClient) get(ctx context.Context, accessToken, path string, out any) error {

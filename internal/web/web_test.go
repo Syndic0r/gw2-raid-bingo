@@ -62,7 +62,7 @@ func TestAuthCodeURL(t *testing.T) {
 	for _, want := range []string{
 		"client_id=appid",
 		"response_type=code",
-		"scope=identify+guilds",
+		"scope=identify",
 		"state=state123",
 		"code_challenge_method=S256",
 		"redirect_uri=https%3A%2F%2Fexample.org%2Fauth%2Fcallback",
@@ -73,5 +73,10 @@ func TestAuthCodeURL(t *testing.T) {
 	}
 	if strings.Contains(u, "verifier456") {
 		t.Error("raw PKCE verifier must not appear in the auth URL")
+	}
+	// The guilds scope was dropped: the picker uses the bot's own membership, so
+	// requesting it would be over-broad consent for data we never read.
+	if strings.Contains(u, "guilds") {
+		t.Error("auth URL must not request the guilds scope")
 	}
 }

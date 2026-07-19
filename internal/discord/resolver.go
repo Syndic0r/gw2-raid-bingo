@@ -82,6 +82,16 @@ func (r *resolver) Resolve(ctx context.Context, guildID, userID string) (authz.M
 
 	r.mu.Lock()
 	r.members[key] = cachedMember{member: m, expiresAtUnix: now + int64(memberCacheTTL.Seconds())}
+	// The cache is filled lazily and only read entries are TTL-checked, so expired
+	// entries for users who never come back would pile up forever. Sweep them once
+	// the map grows past a comfortable bound (cheap: runs rarely, under the lock).
+	if len(r.members) > 4096 {
+		for k, v := range r.members {
+			if v.expiresAtUnix <= now {
+				delete(r.members, k)
+			}
+		}
+	}
 	r.mu.Unlock()
 	return m, nil
 }
