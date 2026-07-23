@@ -8,6 +8,21 @@ import (
 	"github.com/Syndic0r/gw2-raid-bingo/internal/store"
 )
 
+// scheduleRetryBackoffSec is how far ahead a transiently-failed schedule's fire_at
+// is pushed before it becomes due again, so a retry does not storm every tick.
+const scheduleRetryBackoffSec int64 = 60
+
+// isPermanentScheduleError reports whether a NewGame failure at fire time is a
+// permanent condition (the schedule should be skipped) rather than a transient one
+// (it should be retried). Permanent: the exact pool-set is already open without
+// replace (ErrGameOpen), no pools remain (ErrNoPoolsSelected), or the pools no
+// longer offer enough squares / other input validation (ErrValidation).
+func isPermanentScheduleError(err error) bool {
+	return errors.Is(err, store.ErrGameOpen) ||
+		errors.Is(err, store.ErrNoPoolsSelected) ||
+		errors.Is(err, store.ErrValidation)
+}
+
 // ScheduleGame records a future game drawing from the given pools (admin only).
 // name is an optional label (empty -> derived at fire time). fireAtUnix is the
 // resolved unix time; validation of "future" and horizon happens before this in
@@ -59,18 +74,19 @@ func (s *Service) RunDueSchedules(ctx context.Context, nowUnix int64) ([]FiredSc
 	for _, sched := range due {
 		game, err := s.store.NewGame(ctx, sched.GuildID, sched.Name, sched.CreatedBy, sched.PoolIDs, sched.ReplaceOpen)
 		if err != nil {
-			if errors.Is(err, store.ErrGameOpen) {
-				// A game with this pool-set was already open and this schedule did
-				// not ask to replace it.
+			if isPermanentScheduleError(err) {
+				// A permanent reason: a game with this pool-set was already open and
+				// this schedule did not ask to replace it (ErrGameOpen), or the pools
+				// were deleted/emptied since scheduling so no card can be filled
+				// (validation). The schedule is done; mark it skipped and report it.
 				_ = s.store.MarkScheduledSkipped(ctx, sched.ID)
 				out = append(out, FiredSchedule{Schedule: sched, Skipped: true})
 				continue
 			}
-			// The pools may have been deleted or emptied since scheduling (no pools
-			// left, or too few squares to fill a card), or a transient error. Mark it
-			// skipped rather than retry-storming, and report it.
-			_ = s.store.MarkScheduledSkipped(ctx, sched.ID)
-			out = append(out, FiredSchedule{Schedule: sched, Skipped: true})
+			// Transient (e.g. a DB hiccup or a cancelled context): do NOT drop the
+			// schedule. Return it to the pending queue with a short backoff so a later
+			// tick retries it, instead of silently marking it skipped forever.
+			_ = s.store.RescheduleForRetry(ctx, sched.ID, nowUnix+scheduleRetryBackoffSec)
 			continue
 		}
 		s.hub.Publish(events.Event{

@@ -149,11 +149,25 @@ func (s *Store) ClaimDueScheduled(ctx context.Context, nowUnix int64, limit int)
 	return due, nil
 }
 
-// MarkScheduledSkipped records that a claimed schedule could not open a game
-// (e.g. a game was already open and replace was not requested).
+// MarkScheduledSkipped records that a claimed schedule could not open a game for
+// a PERMANENT reason (e.g. a game was already open and replace was not requested,
+// or the pools were emptied so a card can no longer be filled). The schedule is
+// done and will not be retried.
 func (s *Store) MarkScheduledSkipped(ctx context.Context, id int64) error {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE scheduled_games SET status = ? WHERE id = ?`, SchedSkipped, id)
+	return err
+}
+
+// RescheduleForRetry returns a claimed (fired) schedule to the pending queue so a
+// later tick retries it, moving its fire_at to nextFireAt as a small backoff. Used
+// when opening the game failed for a TRANSIENT reason (e.g. a DB hiccup), so the
+// schedule is not silently dropped. Only acts on a still-fired row, so a row that
+// was concurrently cancelled or opened is left alone.
+func (s *Store) RescheduleForRetry(ctx context.Context, id, nextFireAt int64) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE scheduled_games SET status = ?, fire_at = ?, fired_at = NULL WHERE id = ? AND status = ?`,
+		SchedPending, nextFireAt, id, SchedFired)
 	return err
 }
 

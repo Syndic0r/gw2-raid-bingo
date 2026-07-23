@@ -228,6 +228,22 @@ func isDiscordCDNURL(u string) bool {
 	return host == "cdn.discordapp.com" || host == "media.discordapp.net"
 }
 
+// importDownloadClient fetches import attachments. Its CheckRedirect re-validates
+// every hop against the Discord-CDN allowlist: the caller only checks the INITIAL
+// URL, so without this a CDN URL that 3xx-redirects elsewhere (an SSRF vector)
+// would be followed by the default client. Redirects are also capped.
+var importDownloadClient = &http.Client{
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 5 {
+			return fmt.Errorf("too many redirects")
+		}
+		if !isDiscordCDNURL(req.URL.String()) {
+			return fmt.Errorf("refusing redirect to non-Discord-CDN host %q", req.URL.Host)
+		}
+		return nil
+	},
+}
+
 // download fetches up to limit bytes from an attachment URL.
 func (b *Bot) download(ctx context.Context, url string, limit int64) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -236,7 +252,7 @@ func (b *Bot) download(ctx context.Context, url string, limit int64) ([]byte, er
 	if err != nil {
 		return nil, err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := importDownloadClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
