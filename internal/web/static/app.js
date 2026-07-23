@@ -165,7 +165,7 @@ function renderGamesList(admin) {
   clear(app);
   closeStream();
   if (state.guilds.length > 1) {
-    app.appendChild(el('button', { class: 'btn secondary', text: '← Change server', onclick: renderGuildPicker }));
+    app.appendChild(el('button', { class: 'btn secondary nav-back', text: '← Change server', onclick: renderGuildPicker }));
   }
   var head = el('div', { class: 'row' });
   head.appendChild(el('h2', { text: state.guild.name }));
@@ -220,7 +220,7 @@ function renderBoard() {
   clear(container);
   var b = state.board;
 
-  container.appendChild(el('button', { class: 'btn secondary', text: '← All games', onclick: loadGames }));
+  container.appendChild(el('button', { class: 'btn secondary nav-back', text: '← All games', onclick: loadGames }));
 
   if (!b.game) {
     var panel = el('div', { class: 'panel' });
@@ -303,7 +303,7 @@ function renderCard(container, card, hasBingo) {
 function renderNewGame() {
   closeStream();
   clear(app);
-  app.appendChild(el('button', { class: 'btn secondary', text: '← All games', onclick: loadGames }));
+  app.appendChild(el('button', { class: 'btn secondary nav-back', text: '← All games', onclick: loadGames }));
   var panel = el('div', { class: 'panel' });
   panel.appendChild(el('h2', { text: 'New game' }));
   if (!state.pools.length) {
@@ -313,7 +313,7 @@ function renderNewGame() {
   }
   panel.appendChild(el('p', { class: 'muted', text: 'Pick the pools to draw squares from. A card needs 24 unique squares, so the pools you choose must have at least that many between them.' }));
 
-  var nameInput = el('input', { class: 'text-input', attrs: { type: 'text', placeholder: 'Optional name (defaults to the pool names)', maxlength: '80' } });
+  var nameInput = el('input', { class: 'text-input name-input', attrs: { type: 'text', placeholder: 'Optional name (defaults to the pool names)', maxlength: '80' } });
   panel.appendChild(nameInput);
 
   var chosen = {};

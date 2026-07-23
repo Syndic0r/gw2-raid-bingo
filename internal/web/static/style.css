@@ -153,6 +153,11 @@ a:hover { text-decoration: underline; }
   color: var(--ink); padding: 0.5rem 0.7rem; font-size: 0.95rem; font-family: inherit;
 }
 .text-input:focus { outline: none; border-color: var(--gold-soft); }
+/* A standalone (non-flex-row) text input, e.g. the new-game name field: fill the width so a long
+   placeholder is not clipped (the base .text-input uses flex:1, which is inert outside a flex row). */
+.name-input { display: block; width: 100%; box-sizing: border-box; margin-bottom: 0.6rem; }
+/* Standalone "back" nav buttons sit directly above a panel; give them breathing room. */
+.btn.nav-back { margin-bottom: 1rem; }
 
 .app-footer { text-align: center; color: var(--ink-dim); font-size: 0.8rem; padding: 1.5rem 1rem 2rem; }
 
