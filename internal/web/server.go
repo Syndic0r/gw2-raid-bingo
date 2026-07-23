@@ -119,9 +119,31 @@ func (s *Server) routes() {
 	})
 }
 
-// Handler returns the http.Handler with the security middleware applied.
+// Handler returns the http.Handler with the security middleware applied. When a
+// BasePath is configured the whole app is mounted under it (e.g. /play), so the
+// routes stay declared at the root and StripPrefix maps the incoming paths.
 func (s *Server) Handler() http.Handler {
-	return s.securityHeaders(s.csrfOriginCheck(s.mux))
+	var h http.Handler = s.mux
+	if s.cfg.BasePath != "" {
+		h = s.stripBase(s.mux)
+	}
+	return s.securityHeaders(s.csrfOriginCheck(h))
+}
+
+// stripBase serves next under cfg.BasePath: it redirects the bare prefix to its
+// trailing-slash form (so the SPA's relative URLs resolve correctly) and strips
+// the prefix before the mux matches. The CSRF check compares the Origin header
+// (which never carries a path), so it is unaffected and stays outside this.
+func (s *Server) stripBase(next http.Handler) http.Handler {
+	prefix := s.cfg.BasePath
+	stripped := http.StripPrefix(prefix, next)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == prefix {
+			http.Redirect(w, r, prefix+"/", http.StatusMovedPermanently)
+			return
+		}
+		stripped.ServeHTTP(w, r)
+	})
 }
 
 // Run starts the HTTP server and blocks until ctx is cancelled, then shuts down.
@@ -225,14 +247,20 @@ func (s *Server) purgeSessionsLoop(ctx context.Context) {
 }
 
 // handleIndex serves the game app shell; its logged-out view is a login screen.
-// The public "add the bot" landing is a separate static site (repo web/), served
-// by nginx under its own low-priv user - it shares nothing with this process.
+// The public "add the bot" landing is served by nginx at / on the same origin;
+// the game lives under BasePath (e.g. /play). A <base> tag reflecting BasePath is
+// injected so the shell's relative asset/API paths resolve under the prefix.
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	data, err := staticFS.ReadFile("static/index.html")
 	if err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
+	base := "/"
+	if s.cfg.BasePath != "" {
+		base = s.cfg.BasePath + "/"
+	}
+	html := strings.Replace(string(data), "<head>", "<head>\n  <base href=\""+base+"\">", 1)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(data)
+	w.Write([]byte(html))
 }

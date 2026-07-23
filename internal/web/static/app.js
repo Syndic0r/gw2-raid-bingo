@@ -43,7 +43,7 @@ async function api(method, path, body) {
 
 // --- boot ---
 async function boot() {
-  state.me = await api('GET', '/api/me');
+  state.me = await api('GET', 'api/me');
   renderAccount();
   renderVersion();
   if (!state.me.loggedIn) { renderLanding(); return; }
@@ -64,13 +64,13 @@ function renderAccount() {
     accountEl.appendChild(el('span', { class: 'acct-label', text: label }));
     accountEl.appendChild(el('button', { class: 'btn secondary', text: 'Log out', onclick: logout }));
   } else if (state.me && state.me.loginEnabled) {
-    accountEl.appendChild(el('a', { class: 'btn', text: 'Log in with Discord', attrs: { href: '/auth/login' } }));
+    accountEl.appendChild(el('a', { class: 'btn', text: 'Log in with Discord', attrs: { href: 'auth/login' } }));
   }
 }
 
 async function logout() {
-  await fetch('/auth/logout', { method: 'POST' });
-  location.href = '/';
+  await fetch('auth/logout', { method: 'POST' });
+  location.reload();
 }
 
 function renderVersion() {
@@ -82,11 +82,11 @@ function renderVersion() {
 function renderLanding() {
   clear(app);
   var hero = el('div', { class: 'hero' });
-  hero.appendChild(el('img', { class: 'crest-lg', attrs: { src: '/assets/logo.png', alt: '' } }));
+  hero.appendChild(el('img', { class: 'crest-lg', attrs: { src: 'assets/logo.png', alt: '' } }));
   hero.appendChild(el('h1', { text: 'GW2 Raid Bingo' }));
   hero.appendChild(el('p', { text: 'Log in with Discord to play your bingo card, in sync with your Discord game.' }));
   if (state.me && state.me.loginEnabled) {
-    hero.appendChild(el('a', { class: 'btn', text: 'Log in with Discord', attrs: { href: '/auth/login' } }));
+    hero.appendChild(el('a', { class: 'btn', text: 'Log in with Discord', attrs: { href: 'auth/login' } }));
   } else {
     hero.appendChild(el('p', { class: 'muted', text: 'Login is not configured on this server.' }));
   }
@@ -101,7 +101,7 @@ async function loadGuilds() {
   clear(app);
   app.appendChild(el('p', { class: 'loading', text: 'Loading your servers...' }));
   try {
-    var data = await api('GET', '/api/guilds');
+    var data = await api('GET', 'api/guilds');
     state.guilds = data.guilds || [];
   } catch (e) {
     clear(app); app.appendChild(el('p', { class: 'error', text: e.message })); return;
@@ -116,7 +116,7 @@ function renderNoGuilds() {
   var panel = el('div', { class: 'panel' });
   panel.appendChild(el('h2', { text: 'No shared servers yet' }));
   panel.appendChild(el('p', { class: 'muted', text: 'The bot is not in any server you are in. Add it to a server to start playing.' }));
-  panel.appendChild(el('a', { class: 'btn', text: 'Add the bot to your server', attrs: { href: '/invite' } }));
+  panel.appendChild(el('a', { class: 'btn', text: 'Add the bot to your server', attrs: { href: 'invite' } }));
   app.appendChild(panel);
 }
 
@@ -183,7 +183,7 @@ async function loadBoard() {
   var container = document.getElementById('board-container');
   if (!container) return;
   try {
-    state.board = await api('GET', '/api/guild/' + state.guild.id + '/board?instance=' + state.instance);
+    state.board = await api('GET', 'api/guild/' + state.guild.id + '/board?instance=' + state.instance);
   } catch (e) {
     clear(container); container.appendChild(el('p', { class: 'error', text: e.message })); return;
   }
@@ -278,7 +278,7 @@ function renderCard(container, card, hasBingo) {
 
 // --- actions ---
 async function dealCard() {
-  try { await api('POST', '/api/guild/' + state.guild.id + '/card', { instance: state.instance }); await loadBoard(); }
+  try { await api('POST', 'api/guild/' + state.guild.id + '/card', { instance: state.instance }); await loadBoard(); }
   catch (e) { alert(e.message); }
 }
 // Client-side bingo check, mirroring the server (rows, columns, both diagonals;
@@ -312,7 +312,7 @@ function toggle(cardId, index) {
   b.hasBingo = hasBingoClient(b.card.cells);
   renderBoard();
 
-  api('POST', '/api/guild/' + state.guild.id + '/toggle', { cardId: cardId, index: index })
+  api('POST', 'api/guild/' + state.guild.id + '/toggle', { cardId: cardId, index: index })
     .catch(function (e) {
       cell.marked = prev;
       b.hasBingo = hasBingoClient(b.card.cells);
@@ -322,26 +322,26 @@ function toggle(cardId, index) {
 }
 async function callBingo(cardId) {
   try {
-    await api('POST', '/api/guild/' + state.guild.id + '/call', { cardId: cardId });
+    await api('POST', 'api/guild/' + state.guild.id + '/call', { cardId: cardId });
     if (window.burstConfetti) window.burstConfetti();
     await loadBoard();
   } catch (e) { alert(e.message); }
 }
 async function newGame() {
   var replace = state.board && state.board.game ? confirm('A game is open. Replace it? Its cards become read-only.') : false;
-  try { await api('POST', '/api/guild/' + state.guild.id + '/game/new', { instance: state.instance, replace: replace }); await loadBoard(); }
+  try { await api('POST', 'api/guild/' + state.guild.id + '/game/new', { instance: state.instance, replace: replace }); await loadBoard(); }
   catch (e) { alert(e.message); }
 }
 async function abortGame() {
   if (!confirm('Abort the open game? Its cards become read-only.')) return;
-  try { await api('POST', '/api/guild/' + state.guild.id + '/game/abort', { instance: state.instance }); await loadBoard(); }
+  try { await api('POST', 'api/guild/' + state.guild.id + '/game/abort', { instance: state.instance }); await loadBoard(); }
   catch (e) { alert(e.message); }
 }
 
 // --- live updates ---
 function openStream() {
   closeStream();
-  state.es = new EventSource('/api/guild/' + state.guild.id + '/events?instance=' + state.instance);
+  state.es = new EventSource('api/guild/' + state.guild.id + '/events?instance=' + state.instance);
   state.es.onmessage = handleStreamEvent;
   ['game_opened', 'game_finished', 'game_aborted', 'card_dealt', 'cell_toggled'].forEach(function (k) {
     state.es.addEventListener(k, handleStreamEvent);
@@ -385,7 +385,7 @@ async function loadData() {
   container.appendChild(el('p', { class: 'loading', text: 'Loading...' }));
   var data;
   try {
-    data = await api('GET', '/api/guild/' + state.guild.id + '/data');
+    data = await api('GET', 'api/guild/' + state.guild.id + '/data');
   } catch (e) {
     clear(container); container.appendChild(el('p', { class: 'error', text: e.message })); return;
   }
@@ -448,7 +448,7 @@ function startEdit(p, e, row) {
   input.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') save(); if (ev.key === 'Escape') finish(); });
   async function save() {
     var t = input.value.trim(); if (!t) return;
-    try { await api('POST', '/api/guild/' + state.guild.id + '/data/entry-edit', { entryId: e.id, text: t }); e.text = t; }
+    try { await api('POST', 'api/guild/' + state.guild.id + '/data/entry-edit', { entryId: e.id, text: t }); e.text = t; }
     catch (err) { alert(err.message); }
     finish();
   }
@@ -461,7 +461,7 @@ function startEdit(p, e, row) {
 async function addEntry(p, input, list) {
   var t = input.value.trim(); if (!t) return;
   try {
-    var res = await api('POST', '/api/guild/' + state.guild.id + '/data/entry-add', { poolId: p.id, text: t });
+    var res = await api('POST', 'api/guild/' + state.guild.id + '/data/entry-add', { poolId: p.id, text: t });
     var e = { id: res.id, text: res.text };
     p.entries.push(e);
     list.appendChild(entryRow(p, e));
@@ -471,13 +471,13 @@ async function addEntry(p, input, list) {
 }
 
 async function removeEntry(e, row) {
-  try { await api('POST', '/api/guild/' + state.guild.id + '/data/entry-remove', { entryId: e.id }); row.remove(); }
+  try { await api('POST', 'api/guild/' + state.guild.id + '/data/entry-remove', { entryId: e.id }); row.remove(); }
   catch (err) { alert(err.message); }
 }
 
 async function deletePool(p) {
   if (!confirm('Delete the shared pool "' + p.name + '" and all its squares?')) return;
-  try { await api('POST', '/api/guild/' + state.guild.id + '/data/pool-delete', { poolId: p.id }); loadData(); }
+  try { await api('POST', 'api/guild/' + state.guild.id + '/data/pool-delete', { poolId: p.id }); loadData(); }
   catch (e) { alert(e.message); }
 }
 
@@ -493,7 +493,7 @@ function newPoolForm() {
     var nm = name.value.trim(); if (!nm) return;
     var slug = slugify(nm);
     if (!slug) { alert('Enter a name with letters or numbers.'); return; }
-    try { await api('POST', '/api/guild/' + state.guild.id + '/data/pool-create', { slug: slug, name: nm }); loadData(); }
+    try { await api('POST', 'api/guild/' + state.guild.id + '/data/pool-create', { slug: slug, name: nm }); loadData(); }
     catch (e) { alert(e.message); }
   }
   name.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') create(); });

@@ -21,7 +21,11 @@ SEED_GUILD_ID=1098188107708371015
 
 # --- Web ---
 HTTP_ADDR=127.0.0.1:8771
+# BASE_URL is the ORIGIN only (scheme + host, no path). The public landing is
+# served by nginx at / on this origin; the game app is mounted under BASE_PATH.
 BASE_URL=https://gw2-raid-bingo.duckdns.org
-# Public "add the bot" landing site (separate static site). The game app links to
-# it from its logged-out screen. Optional.
-BOT_BASE_URL=https://gw2-raid-bingo-bot.duckdns.org
+# Path prefix the game is served under (unset or / = the origin root). The Discord
+# OAuth redirect URI must match BASE_URL + BASE_PATH + /auth/callback exactly. In
+# production this is /play (the landing is served by nginx at /); set it as part of
+# the nginx cutover so the app and nginx agree on the prefix at the same moment.
+BASE_PATH=/play

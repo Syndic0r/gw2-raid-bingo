@@ -27,11 +27,11 @@ type Config struct {
 	SeedFile    string // SEED_FILE (path to entries.json; optional)
 	SeedGuildID string // SEED_GUILD_ID
 
-	// Web (used in phase 5; parsed now so config stays one type).
-	HTTPAddr   string // HTTP_ADDR, default 127.0.0.1:8771
-	BaseURL    string // BASE_URL, e.g. https://gw2-raid-bingo.duckdns.org (the game)
-	BotBaseURL string // BOT_BASE_URL, e.g. https://gw2-raid-bingo-bot.duckdns.org (the landing)
-	Version    string // build version (set by main from the ldflags-stamped var, not from env)
+	// Web.
+	HTTPAddr string // HTTP_ADDR, default 127.0.0.1:8771
+	BaseURL  string // BASE_URL: the ORIGIN only, e.g. https://gw2-raid-bingo.duckdns.org (no path)
+	BasePath string // BASE_PATH: the path prefix the game is mounted under, e.g. /play (unset/"/" = root). Production sets /play; the landing lives at / on the same origin.
+	Version  string // build version (set by main from the ldflags-stamped var, not from env)
 }
 
 // Getenv is the environment lookup, overridable in tests.
@@ -52,7 +52,7 @@ func LoadFrom(get Getenv) (Config, error) {
 		SeedGuildID:  strings.TrimSpace(get("SEED_GUILD_ID")),
 		HTTPAddr:     strings.TrimSpace(get("HTTP_ADDR")),
 		BaseURL:      strings.TrimRight(strings.TrimSpace(get("BASE_URL")), "/"),
-		BotBaseURL:   strings.TrimRight(strings.TrimSpace(get("BOT_BASE_URL")), "/"),
+		BasePath:     normalizeBasePath(get("BASE_PATH")),
 	}
 	if c.SeedGuildID == "" {
 		c.SeedGuildID = DefaultSeedGuildID
@@ -99,10 +99,30 @@ func (c Config) RequireWeb() error {
 	return nil
 }
 
-// RedirectURI is the Discord OAuth callback URL derived from BaseURL.
+// RedirectURI is the Discord OAuth callback URL derived from BaseURL + BasePath.
+// It must match a redirect URI registered on the Discord application exactly, e.g.
+// https://gw2-raid-bingo.duckdns.org/play/auth/callback.
 func (c Config) RedirectURI() string {
 	if c.BaseURL == "" {
 		return ""
 	}
-	return c.BaseURL + "/auth/callback"
+	return c.BaseURL + c.BasePath + "/auth/callback"
+}
+
+// normalizeBasePath cleans BASE_PATH into either "" (mounted at the origin root)
+// or a single-leading-slash, no-trailing-slash prefix like "/play". An UNSET value
+// defaults to "" (root), so an existing deploy that has not set BASE_PATH keeps
+// serving at the root until the operator sets BASE_PATH=/play as part of the nginx
+// cutover - this makes an auto-deploy on merge a behavioral no-op. Production sets
+// BASE_PATH=/play (the game lives under /play, the landing at /); "/" also means root.
+func normalizeBasePath(raw string) string {
+	p := strings.TrimSpace(raw)
+	if p == "" {
+		return ""
+	}
+	p = "/" + strings.Trim(p, "/")
+	if p == "/" {
+		return ""
+	}
+	return p
 }

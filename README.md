@@ -4,7 +4,7 @@ A free Discord bot and website for **Guild Wars 2 raid bingo**. Open a game for 
 every player gets their own live 5x5 card; mark your squares as the run unfolds - in Discord or in
 the browser, kept in sync - and the first to call **BINGO** wins the round.
 
-- **Add the bot to your server:** https://gw2-raid-bingo-bot.duckdns.org
+- **Add the bot to your server:** https://gw2-raid-bingo.duckdns.org
 - **Play:** https://gw2-raid-bingo.duckdns.org
 
 This repository is the **public source mirror** of the application - the Discord bot, the web server,
@@ -33,8 +33,8 @@ instance's data, and the marketing site, none of which are needed to understand 
 - No message content is read or stored; no tracking, ads, or analytics.
 - It stores the minimum to run a game: Discord IDs, your card and marks, server configuration, and the
   squares your admins add. See the hosted instance's
-  [Privacy Policy](https://gw2-raid-bingo-bot.duckdns.org/privacy.html) and
-  [Terms](https://gw2-raid-bingo-bot.duckdns.org/terms.html).
+  [Privacy Policy](https://gw2-raid-bingo.duckdns.org/privacy.html) and
+  [Terms](https://gw2-raid-bingo.duckdns.org/terms.html).
 
 ## Building it
 

@@ -61,7 +61,8 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "login failed", http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/", http.StatusFound)
+	// Back to the game home under the base path (never the origin root, which is the landing).
+	http.Redirect(w, r, s.cfg.BasePath+"/", http.StatusFound)
 }
 
 // handleLogout ends the session.

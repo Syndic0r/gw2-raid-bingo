@@ -54,5 +54,8 @@ reconnects automatically.
 
 Web mode activates when `DISCORD_APP_ID`, `DISCORD_CLIENT_SECRET`, and
 `BASE_URL` are all set (see `gw2-raid-bingo.conf.example`); otherwise
-the bot runs standalone. The OAuth redirect URI is `BASE_URL` + `/auth/callback`,
-which must be registered on the Discord application.
+the bot runs standalone. `BASE_URL` is the origin (no path); `BASE_PATH` is the
+path prefix the app is mounted under (unset/`/` = the root; production sets
+`/play`). The OAuth redirect URI is `BASE_URL` + `BASE_PATH` + `/auth/callback`
+(e.g. `https://gw2-raid-bingo.duckdns.org/play/auth/callback`), which must be
+registered on the Discord application exactly.

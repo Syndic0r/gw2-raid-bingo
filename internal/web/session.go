@@ -23,6 +23,16 @@ func hashToken(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// cookiePath scopes cookies to the app's base path (e.g. /play) so the session
+// and OAuth cookies are not sent to the landing served at the origin root. Falls
+// back to "/" when the app is mounted at the root.
+func (s *Server) cookiePath() string {
+	if s.cfg.BasePath != "" {
+		return s.cfg.BasePath
+	}
+	return "/"
+}
+
 // setCookie writes an HttpOnly cookie. Secure is set for HTTPS deployments;
 // SameSite=Lax lets the OAuth redirect back carry the session while still
 // blocking cross-site POSTs.
@@ -30,7 +40,7 @@ func (s *Server) setCookie(w http.ResponseWriter, name, value string, ttl time.D
 	http.SetCookie(w, &http.Cookie{
 		Name:     name,
 		Value:    value,
-		Path:     "/",
+		Path:     s.cookiePath(),
 		HttpOnly: true,
 		Secure:   s.secureCookies,
 		SameSite: http.SameSiteLaxMode,
@@ -43,7 +53,7 @@ func (s *Server) clearCookie(w http.ResponseWriter, name string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     name,
 		Value:    "",
-		Path:     "/",
+		Path:     s.cookiePath(),
 		HttpOnly: true,
 		Secure:   s.secureCookies,
 		SameSite: http.SameSiteLaxMode,

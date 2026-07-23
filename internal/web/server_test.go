@@ -114,6 +114,52 @@ func TestDataEndpointRequiresAdmin(t *testing.T) {
 	}
 }
 
+func TestBasePathMount(t *testing.T) {
+	s := newTestServer(t)
+	s.cfg.BasePath = "/play"
+
+	// Under the prefix the SPA shell is served and gets a <base> tag pointing at it.
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/play/", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/play/ status %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `<base href="/play/">`) {
+		t.Errorf("missing injected base tag: %q", rec.Body.String())
+	}
+
+	// The bare prefix redirects to the trailing-slash form so relative URLs resolve.
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/play", nil))
+	if rec.Code != http.StatusMovedPermanently || rec.Header().Get("Location") != "/play/" {
+		t.Fatalf("/play redirect = %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+
+	// API routes are reachable under the prefix.
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/play/api/me", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/play/api/me status %d", rec.Code)
+	}
+
+	// Embedded static assets are reachable under the prefix (StripPrefix -> fileserver).
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/play/assets/app.js", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/play/assets/app.js status %d", rec.Code)
+	}
+	if rec.Header().Get("Cache-Control") != "no-cache" {
+		t.Errorf("asset missing no-cache header: %q", rec.Header().Get("Cache-Control"))
+	}
+
+	// The un-prefixed path is not served by the app (nginx owns / for the landing).
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/me", nil))
+	if rec.Code == http.StatusOK {
+		t.Errorf("/api/me should not be served under the prefix mount, got %d", rec.Code)
+	}
+}
+
 func TestCSRFOriginCheck(t *testing.T) {
 	s := newTestServer(t)
 	s.cfg.BaseURL = "https://example.org"
