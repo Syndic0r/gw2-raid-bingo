@@ -8,17 +8,22 @@ import (
 	"encoding/json"
 	"errors"
 	"math/rand"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Syndic0r/gw2-raid-bingo/internal/bingo"
 )
 
 // Game/card errors surfaced to callers for user-facing messages.
 var (
-	// ErrGameOpen is returned when opening a game while one is already open for
-	// the instance and the caller did not ask to replace it.
-	ErrGameOpen = errors.New("a game is already open for this instance")
+	// ErrGameOpen is returned when opening a game whose exact pool-set already has
+	// an open game and the caller did not ask to replace it.
+	ErrGameOpen = errors.New("a game with these pools is already open")
+	// ErrNoPoolsSelected is returned when opening a game with no pools chosen.
+	ErrNoPoolsSelected = errors.New("select at least one pool to start a game")
 	// ErrGameNotOpen is returned when acting on a game that is not open.
 	ErrGameNotOpen = errors.New("game is not open")
 	// ErrNoBingo is returned when a player calls bingo without a completed line.
@@ -29,13 +34,19 @@ var (
 	ErrForbidden = errors.New("not allowed")
 )
 
-// NewGame opens a game for an instance. If a game is already open and replace is
-// false, it returns ErrGameOpen. If replace is true, the existing open game is
-// aborted first (its cards become read-only). sharedPoolIDs are the shared pools
-// mixed into every card; they are validated against the guild.
-func (s *Store) NewGame(ctx context.Context, guildID string, inst bingo.Instance, createdBy string, sharedPoolIDs []int64, replace bool) (Game, error) {
-	if !inst.Valid() {
-		return Game{}, validationErr("unknown instance")
+// NewGame opens a game drawing from the given set of pools. name is an optional
+// human label; when empty it is derived from the pool names. The pool set is the
+// game's identity: at most one open game per distinct set per guild. If a game is
+// already open for the same set and replace is false, it returns ErrGameOpen; if
+// replace is true, that open game is aborted first (its cards become read-only).
+//
+// It validates that at least one pool is selected (ErrNoPoolsSelected), that every
+// pool belongs to the guild, and that the pools jointly hold enough distinct active
+// squares to fill a card - all before inserting, so no undealable game is created.
+func (s *Store) NewGame(ctx context.Context, guildID, name, createdBy string, poolIDs []int64, replace bool) (Game, error) {
+	cleanName, err := cleanGameName(name)
+	if err != nil {
+		return Game{}, err
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -43,10 +54,38 @@ func (s *Store) NewGame(ctx context.Context, guildID string, inst bingo.Instance
 	}
 	defer tx.Rollback()
 
+	// Validate + dedupe the pools (in the caller's order), rejecting an empty
+	// selection and any pool that is not this guild's.
+	pools, err := s.validatePoolsTx(ctx, tx, guildID, poolIDs)
+	if err != nil {
+		return Game{}, err
+	}
+	if len(pools) == 0 {
+		return Game{}, ErrNoPoolsSelected
+	}
+	ids := make([]int64, len(pools))
+	for i, p := range pools {
+		ids[i] = p.ID
+	}
+
+	// The pools must jointly offer enough distinct squares to fill a board, checked
+	// now so the failure is at game creation rather than the first card deal.
+	entries, err := s.entriesForPoolsTx(ctx, tx, guildID, ids)
+	if err != nil {
+		return Game{}, err
+	}
+	if have := bingo.UsableEntryCount(toBingoEntries(entries)); have < bingo.FillCount {
+		return Game{}, validationErr(
+			"the selected pools have only %d unique squares; a game needs at least %d - add more squares or select more pools",
+			have, bingo.FillCount)
+	}
+
+	key := poolSetKey(ids)
+
 	var openID int64
 	err = tx.QueryRowContext(ctx,
-		`SELECT id FROM games WHERE guild_id = ? AND instance = ? AND status = ?`,
-		guildID, string(inst), StatusOpen).Scan(&openID)
+		`SELECT id FROM games WHERE guild_id = ? AND pool_set_key = ? AND status = ?`,
+		guildID, key, StatusOpen).Scan(&openID)
 	switch {
 	case err == nil:
 		if !replace {
@@ -58,26 +97,24 @@ func (s *Store) NewGame(ctx context.Context, guildID string, inst bingo.Instance
 			return Game{}, err
 		}
 	case errors.Is(err, sql.ErrNoRows):
-		// no open game - fine
+		// no open game for this set - fine
 	default:
 		return Game{}, err
 	}
 
-	// Validate the shared pool ids belong to this guild.
-	poolIDs, err := s.validateSharedPools(ctx, tx, guildID, sharedPoolIDs)
-	if err != nil {
-		return Game{}, err
+	if cleanName == "" {
+		cleanName = deriveGameName(pools)
 	}
-	poolJSON, err := json.Marshal(poolIDs)
+	poolJSON, err := json.Marshal(ids)
 	if err != nil {
 		return Game{}, err
 	}
 
 	ts := now()
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO games (guild_id, instance, status, created_by, pool_ids, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		guildID, string(inst), StatusOpen, createdBy, string(poolJSON), ts)
+		`INSERT INTO games (guild_id, name, pool_set_key, status, created_by, pool_ids, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		guildID, cleanName, key, StatusOpen, createdBy, string(poolJSON), ts)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return Game{}, ErrGameOpen
@@ -92,32 +129,72 @@ func (s *Store) NewGame(ctx context.Context, guildID string, inst bingo.Instance
 		return Game{}, err
 	}
 	return Game{
-		ID: id, GuildID: guildID, Instance: inst, Status: StatusOpen,
-		CreatedBy: createdBy, PoolIDs: poolIDs, CreatedAt: ts,
+		ID: id, GuildID: guildID, Name: cleanName, PoolSetKey: key, Status: StatusOpen,
+		CreatedBy: createdBy, PoolIDs: ids, CreatedAt: ts,
 	}, nil
 }
 
-func (s *Store) validateSharedPools(ctx context.Context, tx *sql.Tx, guildID string, ids []int64) ([]int64, error) {
-	out := make([]int64, 0, len(ids))
+// validatePoolsTx dedupes ids (preserving the caller's order) and verifies each
+// pool belongs to the guild, returning the resolved pool rows. A pool id that is
+// unknown or from another guild is rejected rather than silently dropped.
+func (s *Store) validatePoolsTx(ctx context.Context, tx *sql.Tx, guildID string, ids []int64) ([]Pool, error) {
+	out := make([]Pool, 0, len(ids))
 	seen := make(map[int64]struct{}, len(ids))
 	for _, id := range ids {
 		if _, dup := seen[id]; dup {
 			continue
 		}
-		var ok int
+		seen[id] = struct{}{}
+		var p Pool
 		err := tx.QueryRowContext(ctx,
-			`SELECT 1 FROM pools WHERE id = ? AND guild_id = ? AND kind = ?`,
-			id, guildID, KindShared).Scan(&ok)
+			`SELECT id, guild_id, slug, name, created_at FROM pools WHERE id = ? AND guild_id = ?`,
+			id, guildID).Scan(&p.ID, &p.GuildID, &p.Slug, &p.Name, &p.CreatedAt)
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, validationErr("shared pool %d does not belong to this server", id)
+			return nil, validationErr("pool %d does not belong to this server", id)
 		}
 		if err != nil {
 			return nil, err
 		}
-		seen[id] = struct{}{}
-		out = append(out, id)
+		out = append(out, p)
 	}
 	return out, nil
+}
+
+// poolSetKey is the canonical identity of a set of pool ids: sorted ascending,
+// de-duplicated, and joined with commas. Two selections of the same pools produce
+// the same key regardless of order, which is what the one-open-game-per-set unique
+// index keys on.
+func poolSetKey(ids []int64) string {
+	uniq := make([]int64, 0, len(ids))
+	seen := make(map[int64]struct{}, len(ids))
+	for _, id := range ids {
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		uniq = append(uniq, id)
+	}
+	sort.Slice(uniq, func(i, j int) bool { return uniq[i] < uniq[j] })
+	parts := make([]string, len(uniq))
+	for i, id := range uniq {
+		parts[i] = strconv.FormatInt(id, 10)
+	}
+	return strings.Join(parts, ",")
+}
+
+// deriveGameName builds a default label from the pool names (in selection order),
+// rune-capped to MaxGameNameLen so a long selection cannot produce an oversized name.
+func deriveGameName(pools []Pool) string {
+	names := make([]string, len(pools))
+	for i, p := range pools {
+		names[i] = p.Name
+	}
+	name := strings.Join(names, " + ")
+	if utf8.RuneCountInString(name) > MaxGameNameLen {
+		r := []rune(name)
+		name = strings.TrimSpace(string(r[:MaxGameNameLen-1])) + "…"
+	}
+	return name
 }
 
 // AbortGame marks an open game aborted; its cards become read-only history.
@@ -134,24 +211,20 @@ func (s *Store) AbortGame(ctx context.Context, guildID string, gameID int64) err
 	return nil
 }
 
-// GetOpenGame returns the open game for an instance, or ErrNotFound.
-func (s *Store) GetOpenGame(ctx context.Context, guildID string, inst bingo.Instance) (Game, error) {
-	return s.scanGame(s.db.QueryRowContext(ctx,
-		`SELECT id, guild_id, instance, status, created_by, pool_ids, created_at,
-		        finished_at, winner_user_id, winner_card_id
-		 FROM games WHERE guild_id = ? AND instance = ? AND status = ?`,
-		guildID, string(inst), StatusOpen))
-}
+// gameColumns is the shared SELECT list for scanning a Game.
+const gameColumns = `id, guild_id, name, pool_set_key, status, created_by, pool_ids, created_at,
+	        finished_at, winner_user_id, winner_card_id`
 
-// LatestGame returns the most recently created game for an instance regardless
-// of status, or ErrNotFound. Used for post-win displays once the game is no
-// longer open.
-func (s *Store) LatestGame(ctx context.Context, guildID string, inst bingo.Instance) (Game, error) {
-	return s.scanGame(s.db.QueryRowContext(ctx,
-		`SELECT id, guild_id, instance, status, created_by, pool_ids, created_at,
-		        finished_at, winner_user_id, winner_card_id
-		 FROM games WHERE guild_id = ? AND instance = ?
-		 ORDER BY id DESC LIMIT 1`, guildID, string(inst)))
+// ListOpenGames returns a guild's currently-open games, newest first.
+func (s *Store) ListOpenGames(ctx context.Context, guildID string) ([]Game, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+gameColumns+` FROM games WHERE guild_id = ? AND status = ?
+		 ORDER BY created_at DESC, id DESC`, guildID, StatusOpen)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanGames(rows)
 }
 
 // ListRecentGames returns a guild's most recent finished or aborted games,
@@ -161,15 +234,17 @@ func (s *Store) ListRecentGames(ctx context.Context, guildID string, limit int) 
 		limit = 50
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, guild_id, instance, status, created_by, pool_ids, created_at,
-		        finished_at, winner_user_id, winner_card_id
-		 FROM games WHERE guild_id = ? AND status IN (?, ?)
+		`SELECT `+gameColumns+` FROM games WHERE guild_id = ? AND status IN (?, ?)
 		 ORDER BY COALESCE(finished_at, created_at) DESC, id DESC LIMIT ?`,
 		guildID, StatusFinished, StatusAborted, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+	return scanGames(rows)
+}
+
+func scanGames(rows *sql.Rows) ([]Game, error) {
 	var out []Game
 	for rows.Next() {
 		g, err := scanGameRows(rows)
@@ -185,17 +260,15 @@ func (s *Store) ListRecentGames(ctx context.Context, guildID string, limit int) 
 func scanGameRows(rows *sql.Rows) (Game, error) {
 	var (
 		g            Game
-		inst         string
 		poolJSON     string
 		finishedAt   sql.NullInt64
 		winnerUserID sql.NullString
 		winnerCardID sql.NullInt64
 	)
-	if err := rows.Scan(&g.ID, &g.GuildID, &inst, &g.Status, &g.CreatedBy, &poolJSON,
+	if err := rows.Scan(&g.ID, &g.GuildID, &g.Name, &g.PoolSetKey, &g.Status, &g.CreatedBy, &poolJSON,
 		&g.CreatedAt, &finishedAt, &winnerUserID, &winnerCardID); err != nil {
 		return Game{}, err
 	}
-	g.Instance = bingo.Instance(inst)
 	g.FinishedAt = finishedAt.Int64
 	g.WinnerUserID = winnerUserID.String
 	g.WinnerCardID = winnerCardID.Int64
@@ -210,21 +283,18 @@ func scanGameRows(rows *sql.Rows) (Game, error) {
 // GetGame returns a game by id within a guild, or ErrNotFound.
 func (s *Store) GetGame(ctx context.Context, guildID string, gameID int64) (Game, error) {
 	return s.scanGame(s.db.QueryRowContext(ctx,
-		`SELECT id, guild_id, instance, status, created_by, pool_ids, created_at,
-		        finished_at, winner_user_id, winner_card_id
-		 FROM games WHERE guild_id = ? AND id = ?`, guildID, gameID))
+		`SELECT `+gameColumns+` FROM games WHERE guild_id = ? AND id = ?`, guildID, gameID))
 }
 
 func (s *Store) scanGame(row *sql.Row) (Game, error) {
 	var (
 		g            Game
-		inst         string
 		poolJSON     string
 		finishedAt   sql.NullInt64
 		winnerUserID sql.NullString
 		winnerCardID sql.NullInt64
 	)
-	err := row.Scan(&g.ID, &g.GuildID, &inst, &g.Status, &g.CreatedBy, &poolJSON,
+	err := row.Scan(&g.ID, &g.GuildID, &g.Name, &g.PoolSetKey, &g.Status, &g.CreatedBy, &poolJSON,
 		&g.CreatedAt, &finishedAt, &winnerUserID, &winnerCardID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Game{}, ErrNotFound
@@ -232,7 +302,6 @@ func (s *Store) scanGame(row *sql.Row) (Game, error) {
 	if err != nil {
 		return Game{}, err
 	}
-	g.Instance = bingo.Instance(inst)
 	g.FinishedAt = finishedAt.Int64
 	g.WinnerUserID = winnerUserID.String
 	g.WinnerCardID = winnerCardID.Int64
@@ -262,9 +331,7 @@ func (s *Store) GetOrDealCard(ctx context.Context, guildID string, gameID int64,
 	defer tx.Rollback()
 
 	game, err := s.scanGame(tx.QueryRowContext(ctx,
-		`SELECT id, guild_id, instance, status, created_by, pool_ids, created_at,
-		        finished_at, winner_user_id, winner_card_id
-		 FROM games WHERE guild_id = ? AND id = ?`, guildID, gameID))
+		`SELECT `+gameColumns+` FROM games WHERE guild_id = ? AND id = ?`, guildID, gameID))
 	if err != nil {
 		return Card{}, err
 	}
@@ -272,15 +339,11 @@ func (s *Store) GetOrDealCard(ctx context.Context, guildID string, gameID int64,
 		return Card{}, ErrGameNotOpen
 	}
 
-	instPool, err := s.instancePoolTx(ctx, tx, guildID, game.Instance)
-	if err != nil {
-		return Card{}, err
-	}
-	instEntries, err := s.entriesForPoolsTx(ctx, tx, guildID, []int64{instPool.ID})
-	if err != nil {
-		return Card{}, err
-	}
-	sharedEntries, err := s.entriesForPoolsTx(ctx, tx, guildID, game.PoolIDs)
+	// Draw from the union of the game's selected pools. A pool id whose pool was
+	// deleted after the game opened simply contributes no entries; if that drops
+	// the union below a full card, GenerateCard returns bingo.ErrNotEnoughEntries
+	// rather than panicking.
+	entries, err := s.entriesForPoolsTx(ctx, tx, guildID, game.PoolIDs)
 	if err != nil {
 		return Card{}, err
 	}
@@ -288,7 +351,7 @@ func (s *Store) GetOrDealCard(ctx context.Context, guildID string, gameID int64,
 	if r == nil {
 		r = rand.New(rand.NewSource(cryptoSeed()))
 	}
-	card, err := bingo.GenerateCard(toBingoEntries(instEntries), toBingoEntries(sharedEntries), r)
+	card, err := bingo.GenerateCard(toBingoEntries(entries), r)
 	if err != nil {
 		return Card{}, err
 	}
@@ -537,19 +600,6 @@ func (s *Store) cardCells(ctx context.Context, q querier, cardID int64) ([]CardC
 		cells = append(cells, cell)
 	}
 	return cells, rows.Err()
-}
-
-func (s *Store) instancePoolTx(ctx context.Context, tx *sql.Tx, guildID string, inst bingo.Instance) (Pool, error) {
-	var p Pool
-	err := tx.QueryRowContext(ctx,
-		`SELECT id, guild_id, kind, slug, name, created_at
-		 FROM pools WHERE guild_id = ? AND kind = ? AND slug = ?`,
-		guildID, KindInstance, string(inst)).
-		Scan(&p.ID, &p.GuildID, &p.Kind, &p.Slug, &p.Name, &p.CreatedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return Pool{}, ErrNotFound
-	}
-	return p, err
 }
 
 func (s *Store) entriesForPoolsTx(ctx context.Context, tx *sql.Tx, guildID string, poolIDs []int64) ([]Entry, error) {

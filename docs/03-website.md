@@ -17,22 +17,24 @@ enforced).
 - **Server picker (multi-server):** after login the site shows the user's servers
   that the bot is also in - the user's guild list intersected with the bot's. One
   server auto-selects; several show a picker; none prompts to add the bot.
-- **Game view:** instance tabs (W1-W8, HTCM), a live board, deal/toggle/CALL
-  BINGO, admin new-game/abort, and a leaderboard. Confetti fires on a win.
+- **Games list:** the guild's open games (each labelled by its pool set), plus,
+  for admins, a **New game** button that opens a pool multi-select (with an
+  optional custom name). Selecting a game shows a live board with
+  deal/toggle/CALL BINGO, admin abort, and a leaderboard. Confetti fires on a win.
 
 ## Managing data (admins)
 
-Bingo admins get a **Manage data** button in the game view: a page listing every
-pool in two groups - the static wings/encounters and the shared pools - with all
-their squares. From there they add, edit, or remove squares and create or delete
-shared pools, with no ids to guess. Every data endpoint re-checks membership and
-the bingo-admin rule server-side, and all store queries are guild-scoped, so an
-admin of one server can never touch another server's data.
+Bingo admins get a **Manage data** button: a page listing every pool (all equal
+and deletable now - new servers start with blank Wing 1-8 pools) with its
+squares. From there they add, edit, or remove squares and create or delete pools,
+with no ids to guess. Every data endpoint re-checks membership and the
+bingo-admin rule server-side, and all store queries are guild-scoped, so an admin
+of one server can never touch another server's data.
 
 ## Live updates
 
-`GET /api/guild/{id}/events?instance=w1` is a Server-Sent Events stream scoped to
-one instance. On each event the client refetches the board, so payloads stay tiny
+`GET /api/guild/{id}/events?game=<id>` is a Server-Sent Events stream scoped to
+one game. On each event the client refetches the board, so payloads stay tiny
 and a missed event self-heals on the next fetch or reconnect. `EventSource`
 reconnects automatically.
 

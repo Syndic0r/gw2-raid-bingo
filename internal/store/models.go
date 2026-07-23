@@ -2,11 +2,11 @@ package store
 
 import "github.com/Syndic0r/gw2-raid-bingo/internal/bingo"
 
-// Pool kinds.
-const (
-	KindInstance = "instance"
-	KindShared   = "shared"
-)
+// poolKind is the value written to the vestigial pools.kind column. The former
+// instance/shared distinction was removed (migration 0006): every pool is an
+// ordinary, deletable pool now. The column and its CHECK remain only because
+// rewriting the pools table with foreign keys on would cascade-delete entries.
+const poolKind = "shared"
 
 // Game statuses.
 const (
@@ -25,12 +25,11 @@ type GuildSettings struct {
 	UpdatedAt         int64
 }
 
-// Pool is a set of bingo squares: one of the nine fixed instance pools, or a
-// named shared pool.
+// Pool is a named set of bingo squares. All pools are equal: a game is built from
+// whichever pools the admin selects (there is no longer a privileged per-wing pool).
 type Pool struct {
 	ID        int64
 	GuildID   string
-	Kind      string
 	Slug      string
 	Name      string
 	CreatedAt int64
@@ -47,11 +46,15 @@ type Entry struct {
 	UpdatedAt int64
 }
 
-// Game is one bingo round for an instance.
+// Game is one bingo round, identified by the set of pools it draws from. Name is
+// a human label (auto-derived from the pool names, or an admin-supplied override).
+// PoolSetKey is the canonical key of the sorted, de-duped PoolIDs; at most one open
+// game per (guild, PoolSetKey).
 type Game struct {
 	ID           int64
 	GuildID      string
-	Instance     bingo.Instance
+	Name         string
+	PoolSetKey   string
 	Status       string
 	CreatedBy    string
 	PoolIDs      []int64

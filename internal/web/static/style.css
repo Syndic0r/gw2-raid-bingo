@@ -93,6 +93,15 @@ a:hover { text-decoration: underline; }
 .guild-icon { width: 34px; height: 34px; border-radius: 50%; background: var(--bg-soft); object-fit: cover; }
 .badge { font-size: 0.7rem; background: var(--blurple); color: #fff; border-radius: 6px; padding: 0.1rem 0.45rem; }
 
+/* ---- new-game pool picker ---- */
+.pick-list { display: flex; flex-direction: column; gap: 0.4rem; margin: 0.6rem 0; }
+.pick-row {
+  display: flex; align-items: center; gap: 0.6rem; width: 100%;
+  background: var(--panel-2); border: 1px solid var(--border); color: var(--ink);
+  border-radius: 10px; padding: 0.55rem 0.8rem; cursor: pointer; font-size: 1rem;
+}
+.pick-row:hover { border-color: var(--gold-soft); }
+
 /* ---- instance tabs ---- */
 .tabs { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 1rem; }
 .tab { background: var(--panel-2); border: 1px solid var(--border); color: var(--ink-soft); border-radius: 8px; padding: 0.4rem 0.7rem; cursor: pointer; font-size: 0.85rem; }

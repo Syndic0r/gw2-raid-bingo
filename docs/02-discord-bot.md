@@ -8,28 +8,28 @@ It uses no privileged intents.
 | Command | Who | What |
 |---|---|---|
 | `/setup` | Server administrators | Pick the announcement channel (required - where win messages post), the bingo-admin roles (multi-select), and an optional participant role pinged on a win. Each choice saves immediately. |
-| `/bingo new instance [replace]` | Bingo admins | Open a game for an instance. All shared pools are included (fine-grained pool selection is a website feature). If one is open, `replace` (or the confirm button) aborts it first. |
-| `/bingo abort instance` | Bingo admins | Abort the open game after a confirm; its cards become read-only. |
-| `/bingo card instance` | Anyone | Get your own card for the open game as an image plus a 5x5 grid of toggle buttons. Completing a line offers a CALL BINGO follow-up. |
-| `/bingo status instance` | Anyone | Show player count, closest-to-bingo leaders, and the website link. |
-| `/bingo post instance` | Bingo admins | Post a live status message with a "Deal me in" button; it updates as the game changes. |
-| `/bingo cards instance` | Bingo admins | Read-only inspection: pick a player, view their card image. |
-| `/bingo schedule [in] [at] [tz] [replace]` | Bingo admins | Schedule games to open later. Give a delay (`in:2h30m`, `1d`) or an absolute time (`at:2026-07-20 20:00`, optional `tz:Europe/Berlin`), then pick one or more instances from the multi-select. A background scheduler opens them at that time and announces it. |
+| `/bingo new [replace]` | Bingo admins | Open a game: pick the pools to draw from in a multi-select. The game is named from the pools; its pool-set is its identity. If a game with the same pools is open, re-run with `replace:true` to abort it first. (The website also offers an optional custom game name.) |
+| `/bingo abort game` | Bingo admins | Abort an open game (picked from the autocomplete) after a confirm; its cards become read-only. |
+| `/bingo card game` | Anyone | Get your own card for an open game as an image plus a 5x5 grid of toggle buttons. Completing a line offers a CALL BINGO follow-up. |
+| `/bingo status game` | Anyone | Show player count, closest-to-bingo leaders, and the website link for a game. |
+| `/bingo post game` | Bingo admins | Post a live status message for a game with a "Deal me in" button; it updates as the game changes. |
+| `/bingo cards game` | Bingo admins | Read-only inspection: pick a game, then a player, view their card image. |
+| `/bingo schedule [in] [at] [tz] [replace]` | Bingo admins | Schedule a game to open later. Give a delay (`in:2h30m`, `1d`) or an absolute time (`at:2026-07-20 20:00`, optional `tz:Europe/Berlin`), then pick the pools from the multi-select. A background scheduler opens it at that time and announces it. |
 | `/bingo scheduled` | Bingo admins | List upcoming scheduled games with their ids. |
 | `/bingo unschedule id` | Bingo admins | Cancel a scheduled game by id. |
-| `/bingo-data pool-add\|add\|list\|remove\|clear\|import\|export` | Bingo admins | Manage this server's card texts. The `pool` option autocompletes every pool (static wings/encounters + shared, labeled by type), so there is no guessing a slug. `remove` and `clear` also use the pool dropdown - `remove` then lets you search the pool's squares by text and pick one (no ids); `clear` empties a whole pool (with confirm); `import`/`export` move the whole data set as a JSON file. |
+| `/bingo-data pool-add\|add\|list\|remove\|clear\|import\|export` | Bingo admins | Manage this server's pools and card texts. The `pool` option autocompletes every pool, so there is no guessing a slug. `remove` and `clear` use the pool dropdown - `remove` then lets you search the pool's squares by text and pick one (no ids); `clear` empties a whole pool (with confirm); `import`/`export` move the whole data set as a JSON file. |
 
 ## Scheduling
 
 `/bingo schedule` resolves the time first (a relative duration or an absolute
-date-time, validated to be in the future and within 60 days), then presents an
-instance multi-select so one schedule can open several wings at once. The
-resolved fire time rides in the select's custom id, so the flow needs no stored
-interaction state. A scheduler loop in the bot ticks every 30 seconds, atomically
-claims due entries (so a game is never opened twice), opens each game with all
-shared pools, refreshes the status message, and posts a heads-up to the
-announcement channel. A schedule whose instance already has a game open is
-skipped unless it was created with `replace`.
+date-time, validated to be in the future and within 60 days), then presents a
+pool multi-select; the schedule stores the chosen pool-set to open when it fires.
+The resolved fire time and replace flag ride in the select's custom id, so the
+flow needs no stored interaction state. A scheduler loop in the bot ticks every
+30 seconds, atomically claims due entries (so a game is never opened twice),
+opens each game from its stored pools, refreshes the status message, and posts a
+heads-up to the announcement channel. A schedule whose pool-set already has a
+game open is skipped unless it was created with `replace`.
 
 ## Setup requirements
 

@@ -83,7 +83,7 @@ func TestMeLoggedOut(t *testing.T) {
 func TestGuildScopedRequiresLogin(t *testing.T) {
 	s := newTestServer(t)
 	rec := httptest.NewRecorder()
-	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/guild/g1/board?instance=w1", nil))
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/guild/g1/games", nil))
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", rec.Code)
 	}

@@ -5,18 +5,17 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/Syndic0r/gw2-raid-bingo/internal/bingo"
 	"github.com/Syndic0r/gw2-raid-bingo/internal/store"
 )
 
 func TestScheduleRequiresAdmin(t *testing.T) {
 	svc, st := newSvc(t, "admin")
-	seed(t, st)
+	sharedID := seed(t, st)
 	ctx := context.Background()
-	if _, err := svc.ScheduleGame(ctx, guild, "rando", bingo.W1, 9_000_000_000, false); !errors.Is(err, ErrForbidden) {
+	if _, err := svc.ScheduleGame(ctx, guild, "rando", "", []int64{sharedID}, 9_000_000_000, false); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("non-admin schedule: got %v, want ErrForbidden", err)
 	}
-	sched, err := svc.ScheduleGame(ctx, guild, "admin", bingo.W1, 9_000_000_000, false)
+	sched, err := svc.ScheduleGame(ctx, guild, "admin", "", []int64{sharedID}, 9_000_000_000, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,14 +26,21 @@ func TestScheduleRequiresAdmin(t *testing.T) {
 
 func TestRunDueSchedulesOpensGame(t *testing.T) {
 	svc, st := newSvc(t, "admin")
-	seed(t, st)
+	sharedID := seed(t, st)
 	ctx := context.Background()
 
-	// Schedule two instances for a past time so both are due.
-	if _, err := svc.ScheduleGame(ctx, guild, "admin", bingo.W1, 1000, false); err != nil {
+	// A second dealable pool so the two schedules use distinct pool-sets (one open
+	// game per set), otherwise the second would be skipped as already-open.
+	poolB, _ := st.CreatePool(ctx, guild, "poolb", "Pool B")
+	for i := 0; i < 24; i++ {
+		st.AddEntry(ctx, guild, poolB.ID, "b "+string(rune('a'+i)))
+	}
+
+	// Schedule two distinct sets for a past time so both are due.
+	if _, err := svc.ScheduleGame(ctx, guild, "admin", "", []int64{sharedID}, 1000, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.ScheduleGame(ctx, guild, "admin", bingo.W2, 1000, false); err != nil {
+	if _, err := svc.ScheduleGame(ctx, guild, "admin", "", []int64{poolB.ID}, 1000, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -47,10 +53,10 @@ func TestRunDueSchedulesOpensGame(t *testing.T) {
 	}
 	for _, f := range fired {
 		if f.Skipped {
-			t.Errorf("schedule for %s unexpectedly skipped", f.Schedule.Instance)
+			t.Errorf("schedule #%d unexpectedly skipped", f.Schedule.ID)
 		}
 		if f.Game.Status != store.StatusOpen {
-			t.Errorf("game for %s not open", f.Schedule.Instance)
+			t.Errorf("game for schedule #%d not open", f.Schedule.ID)
 		}
 	}
 
@@ -69,11 +75,11 @@ func TestRunDueSchedulesSkipsWhenOpen(t *testing.T) {
 	sharedID := seed(t, st)
 	ctx := context.Background()
 
-	// Open a game manually, then a schedule without replace must skip it.
-	if _, err := svc.NewGame(ctx, guild, "admin", bingo.W1, []int64{sharedID}, false); err != nil {
+	// Open a game manually, then a schedule for the same pool-set without replace skips.
+	if _, err := svc.NewGame(ctx, guild, "admin", "", []int64{sharedID}, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.ScheduleGame(ctx, guild, "admin", bingo.W1, 1000, false); err != nil {
+	if _, err := svc.ScheduleGame(ctx, guild, "admin", "", []int64{sharedID}, 1000, false); err != nil {
 		t.Fatal(err)
 	}
 	fired, err := svc.RunDueSchedules(ctx, 2000)
@@ -87,21 +93,19 @@ func TestRunDueSchedulesSkipsWhenOpen(t *testing.T) {
 
 func TestCancelScheduled(t *testing.T) {
 	svc, st := newSvc(t, "admin")
-	seed(t, st)
+	sharedID := seed(t, st)
 	ctx := context.Background()
-	sched, err := svc.ScheduleGame(ctx, guild, "admin", bingo.W1, 9_000_000_000, false)
+	sched, err := svc.ScheduleGame(ctx, guild, "admin", "", []int64{sharedID}, 9_000_000_000, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := svc.CancelScheduled(ctx, guild, "admin", sched.ID); err != nil {
 		t.Fatal(err)
 	}
-	// It no longer fires.
 	fired, _ := svc.RunDueSchedules(ctx, 9_999_999_999)
 	if len(fired) != 0 {
 		t.Fatalf("cancelled schedule still fired: %+v", fired)
 	}
-	// Cancelling again is ErrNotFound.
 	if err := svc.CancelScheduled(ctx, guild, "admin", sched.ID); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("re-cancel: got %v, want ErrNotFound", err)
 	}

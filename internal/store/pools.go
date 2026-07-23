@@ -8,9 +8,9 @@ import (
 	"github.com/Syndic0r/gw2-raid-bingo/internal/bingo"
 )
 
-// CreateSharedPool creates a named shared pool for a guild. It enforces the
-// per-guild shared-pool cap and rejects duplicate slugs.
-func (s *Store) CreateSharedPool(ctx context.Context, guildID, slug, name string) (Pool, error) {
+// CreatePool creates a named pool for a guild. It enforces the per-guild pool cap
+// and rejects duplicate slugs.
+func (s *Store) CreatePool(ctx context.Context, guildID, slug, name string) (Pool, error) {
 	cleanSlugVal, err := cleanSlug(slug)
 	if err != nil {
 		return Pool{}, err
@@ -28,21 +28,20 @@ func (s *Store) CreateSharedPool(ctx context.Context, guildID, slug, name string
 
 	var count int
 	if err := tx.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM pools WHERE guild_id = ? AND kind = ?`,
-		guildID, KindShared).Scan(&count); err != nil {
+		`SELECT COUNT(*) FROM pools WHERE guild_id = ?`, guildID).Scan(&count); err != nil {
 		return Pool{}, err
 	}
-	if count >= MaxSharedPools {
-		return Pool{}, validationErr("this server already has the maximum of %d shared pools", MaxSharedPools)
+	if count >= MaxPools {
+		return Pool{}, validationErr("this server already has the maximum of %d pools", MaxPools)
 	}
 
 	ts := now()
 	res, err := tx.ExecContext(ctx,
 		`INSERT INTO pools (guild_id, kind, slug, name, created_at) VALUES (?, ?, ?, ?, ?)`,
-		guildID, KindShared, cleanSlugVal, cleanNameVal, ts)
+		guildID, poolKind, cleanSlugVal, cleanNameVal, ts)
 	if err != nil {
 		if isUniqueViolation(err) {
-			return Pool{}, validationErr("a shared pool with slug %q already exists", cleanSlugVal)
+			return Pool{}, validationErr("a pool with slug %q already exists", cleanSlugVal)
 		}
 		return Pool{}, err
 	}
@@ -53,15 +52,15 @@ func (s *Store) CreateSharedPool(ctx context.Context, guildID, slug, name string
 	if err := tx.Commit(); err != nil {
 		return Pool{}, err
 	}
-	return Pool{ID: id, GuildID: guildID, Kind: KindShared, Slug: cleanSlugVal, Name: cleanNameVal, CreatedAt: ts}, nil
+	return Pool{ID: id, GuildID: guildID, Slug: cleanSlugVal, Name: cleanNameVal, CreatedAt: ts}, nil
 }
 
-// DeleteSharedPool removes a shared pool and its entries (cascade). Instance
-// pools cannot be deleted.
-func (s *Store) DeleteSharedPool(ctx context.Context, guildID string, poolID int64) error {
+// DeletePool removes a pool and its entries (cascade). Every pool is deletable.
+// Cards snapshot their cell text at deal time, so historical cards drawn from a
+// now-deleted pool are unaffected.
+func (s *Store) DeletePool(ctx context.Context, guildID string, poolID int64) error {
 	res, err := s.db.ExecContext(ctx,
-		`DELETE FROM pools WHERE id = ? AND guild_id = ? AND kind = ?`,
-		poolID, guildID, KindShared)
+		`DELETE FROM pools WHERE id = ? AND guild_id = ?`, poolID, guildID)
 	if err != nil {
 		return err
 	}
@@ -71,12 +70,11 @@ func (s *Store) DeleteSharedPool(ctx context.Context, guildID string, poolID int
 	return nil
 }
 
-// ListPools returns a guild's pools of the given kind (KindInstance or
-// KindShared), ordered by slug.
-func (s *Store) ListPools(ctx context.Context, guildID, kind string) ([]Pool, error) {
+// ListPools returns all of a guild's pools, ordered by slug.
+func (s *Store) ListPools(ctx context.Context, guildID string) ([]Pool, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, guild_id, kind, slug, name, created_at
-		 FROM pools WHERE guild_id = ? AND kind = ? ORDER BY slug`, guildID, kind)
+		`SELECT id, guild_id, slug, name, created_at
+		 FROM pools WHERE guild_id = ? ORDER BY slug`, guildID)
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +82,7 @@ func (s *Store) ListPools(ctx context.Context, guildID, kind string) ([]Pool, er
 	var out []Pool
 	for rows.Next() {
 		var p Pool
-		if err := rows.Scan(&p.ID, &p.GuildID, &p.Kind, &p.Slug, &p.Name, &p.CreatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.GuildID, &p.Slug, &p.Name, &p.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -92,22 +90,17 @@ func (s *Store) ListPools(ctx context.Context, guildID, kind string) ([]Pool, er
 	return out, rows.Err()
 }
 
-// GetPool returns one pool by (guild, kind, slug), or ErrNotFound.
-func (s *Store) GetPool(ctx context.Context, guildID, kind, slug string) (Pool, error) {
+// GetPool returns one pool by (guild, slug), or ErrNotFound.
+func (s *Store) GetPool(ctx context.Context, guildID, slug string) (Pool, error) {
 	var p Pool
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, guild_id, kind, slug, name, created_at
-		 FROM pools WHERE guild_id = ? AND kind = ? AND slug = ?`, guildID, kind, slug).
-		Scan(&p.ID, &p.GuildID, &p.Kind, &p.Slug, &p.Name, &p.CreatedAt)
+		`SELECT id, guild_id, slug, name, created_at
+		 FROM pools WHERE guild_id = ? AND slug = ?`, guildID, slug).
+		Scan(&p.ID, &p.GuildID, &p.Slug, &p.Name, &p.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Pool{}, ErrNotFound
 	}
 	return p, err
-}
-
-// InstancePool returns the fixed instance pool for inst in a guild.
-func (s *Store) InstancePool(ctx context.Context, guildID string, inst bingo.Instance) (Pool, error) {
-	return s.GetPool(ctx, guildID, KindInstance, string(inst))
 }
 
 // AddEntry adds a bingo square to a pool, enforcing the per-pool cap.
@@ -191,10 +184,9 @@ func (s *Store) SoftDeleteEntry(ctx context.Context, guildID string, entryID int
 	return nil
 }
 
-// ClearPoolEntries soft-deletes every active entry in a pool (used to empty a
-// static/instance pool, which cannot itself be deleted). Soft-delete keeps
-// historical cards, which snapshot their text, intact. Returns how many were
-// cleared. The pool must belong to the guild.
+// ClearPoolEntries soft-deletes every active entry in a pool (empties it without
+// removing the pool itself). Soft-delete keeps historical cards, which snapshot
+// their text, intact. Returns how many were cleared. The pool must belong to the guild.
 func (s *Store) ClearPoolEntries(ctx context.Context, guildID string, poolID int64) (int64, error) {
 	var owned int
 	err := s.db.QueryRowContext(ctx,

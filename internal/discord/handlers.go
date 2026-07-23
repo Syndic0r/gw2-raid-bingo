@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/bwmarrin/discordgo"
 
@@ -46,91 +47,114 @@ func (b *Bot) routeCommand(ctx context.Context, i *discordgo.InteractionCreate) 
 	}
 }
 
-// parseInstanceOpt reads and validates the instance option.
-func (b *Bot) parseInstanceOpt(i *discordgo.InteractionCreate, opts []*discordgo.ApplicationCommandInteractionDataOption) (bingo.Instance, bool) {
-	inst, err := bingo.ParseInstance(optString(opts, "instance"))
-	if err != nil {
-		b.replyEphemeral(i, "That is not a valid instance.")
-		return "", false
+// parseGameOpt reads and validates the "game" option (a game id from the
+// autocomplete list).
+func (b *Bot) parseGameOpt(i *discordgo.InteractionCreate, opts []*discordgo.ApplicationCommandInteractionDataOption) (int64, bool) {
+	id, ok := atoi64(optString(opts, "game"))
+	if !ok || id <= 0 {
+		b.replyEphemeral(i, "Pick a game from the list (type to search).")
+		return 0, false
 	}
-	return inst, true
+	return id, true
+}
+
+// poolSelectData builds an ephemeral pool multi-select response. Discord caps a
+// select at 25 options, so a guild with more pools sees the first 25 (with a note).
+func poolSelectData(customID, content string, pools []store.Pool) *discordgo.InteractionResponseData {
+	options := make([]discordgo.SelectMenuOption, 0, 25)
+	for _, p := range pools {
+		options = append(options, discordgo.SelectMenuOption{Label: truncate(p.Name, 100), Value: strconv.FormatInt(p.ID, 10)})
+		if len(options) == 25 {
+			break
+		}
+	}
+	if len(pools) > 25 {
+		content += "\n(Showing the first 25 pools; use the website to pick from more.)"
+	}
+	minSel := 1
+	return &discordgo.InteractionResponseData{
+		Flags:   discordgo.MessageFlagsEphemeral,
+		Content: content,
+		Components: []discordgo.MessageComponent{
+			discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+				discordgo.SelectMenu{
+					MenuType:  discordgo.StringSelectMenu,
+					CustomID:  customID,
+					MinValues: &minSel,
+					MaxValues: len(options),
+					Options:   options,
+				},
+			}},
+		},
+	}
 }
 
 func (b *Bot) handleNew(ctx context.Context, i *discordgo.InteractionCreate, opts []*discordgo.ApplicationCommandInteractionDataOption) {
-	inst, ok := b.parseInstanceOpt(i, opts)
-	if !ok {
+	if !b.requireBingoAdmin(ctx, i, "Only bingo admins can open a game.") {
 		return
 	}
-	replace := optBool(opts, "replace")
-	poolIDs, err := b.svc.AllSharedPoolIDs(ctx, i.GuildID)
+	pools, err := b.svc.Store().ListPools(ctx, i.GuildID)
 	if err != nil {
 		b.replyEphemeral(i, b.describeError(err))
 		return
 	}
-
-	game, err := b.svc.NewGame(ctx, i.GuildID, interactionUserID(i), inst, poolIDs, replace)
-	if errors.Is(err, store.ErrGameOpen) {
-		b.respond(i, &discordgo.InteractionResponseData{
-			Flags:   discordgo.MessageFlagsEphemeral,
-			Content: fmt.Sprintf("A game is already open for **%s**. Replacing it will abort the current game and make all its cards read-only.", inst.Label()),
-			Components: []discordgo.MessageComponent{
-				discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-					discordgo.Button{Label: "Replace it", Style: discordgo.DangerButton, CustomID: "newreplace:" + string(inst)},
-				}},
-			},
-		})
+	if len(pools) == 0 {
+		b.replyEphemeral(i, "This server has no pools yet. Add squares with `/bingo-data add` (or `/bingo-data pool-add` to make a new pool) first.")
 		return
 	}
-	if err != nil {
-		b.replyEphemeral(i, b.describeError(err))
-		return
+	flag := "0"
+	if optBool(opts, "replace") {
+		flag = "1"
 	}
-	b.replyEphemeralf(i, "Opened a new bingo game for **%s**. Players can run `/bingo card` to join. Post a joinable status message with `/bingo post`.", game.Instance.Label())
-	b.refreshStatusMessage(ctx, i.GuildID, inst)
-	// The game-open announcement is posted by the event bridge (onEvent), so it
-	// fires for web- and scheduler-created games too, not just this command.
+	b.respond(i, poolSelectData("newpick:"+flag,
+		"Pick the pools to build this game from. A card needs 24 unique squares, so the pools you choose must have that many between them.", pools))
 }
 
 func (b *Bot) handleAbort(ctx context.Context, i *discordgo.InteractionCreate, opts []*discordgo.ApplicationCommandInteractionDataOption) {
-	inst, ok := b.parseInstanceOpt(i, opts)
+	gameID, ok := b.parseGameOpt(i, opts)
 	if !ok {
+		return
+	}
+	game, err := b.svc.Store().GetGame(ctx, i.GuildID, gameID)
+	if err != nil {
+		b.replyEphemeral(i, b.describeError(err))
 		return
 	}
 	// Confirm before aborting.
 	b.respond(i, &discordgo.InteractionResponseData{
 		Flags:   discordgo.MessageFlagsEphemeral,
-		Content: fmt.Sprintf("Abort the open game for **%s**? All its cards become read-only.", inst.Label()),
+		Content: fmt.Sprintf("Abort **%s**? All its cards become read-only.", game.Name),
 		Components: []discordgo.MessageComponent{
 			discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-				discordgo.Button{Label: "Abort game", Style: discordgo.DangerButton, CustomID: "abort:" + string(inst)},
+				discordgo.Button{Label: "Abort game", Style: discordgo.DangerButton, CustomID: fmt.Sprintf("abort:%d", game.ID)},
 			}},
 		},
 	})
 }
 
 func (b *Bot) handleCard(ctx context.Context, i *discordgo.InteractionCreate, opts []*discordgo.ApplicationCommandInteractionDataOption) {
-	inst, ok := b.parseInstanceOpt(i, opts)
+	gameID, ok := b.parseGameOpt(i, opts)
 	if !ok {
 		return
 	}
-	card, game, err := b.svc.DealCard(ctx, i.GuildID, interactionUserID(i), inst)
+	card, game, err := b.svc.DealCard(ctx, i.GuildID, interactionUserID(i), gameID)
 	if err != nil {
 		b.replyEphemeral(i, b.describeError(err))
 		return
 	}
 	b.respondCardView(i, cardView{
-		title:    inst.Label(),
-		subtitle: fmt.Sprintf("Game #%d - mark your squares", game.ID),
+		title:    game.Name,
+		subtitle: "Mark your squares",
 		card:     card,
 	})
 }
 
 func (b *Bot) handleStatus(ctx context.Context, i *discordgo.InteractionCreate, opts []*discordgo.ApplicationCommandInteractionDataOption) {
-	inst, ok := b.parseInstanceOpt(i, opts)
+	gameID, ok := b.parseGameOpt(i, opts)
 	if !ok {
 		return
 	}
-	stats, err := b.svc.GameStatsForInstance(ctx, i.GuildID, inst)
+	stats, err := b.svc.GameStatsForGame(ctx, i.GuildID, gameID)
 	if err != nil {
 		b.replyEphemeral(i, b.describeError(err))
 		return
@@ -138,29 +162,29 @@ func (b *Bot) handleStatus(ctx context.Context, i *discordgo.InteractionCreate, 
 	b.respond(i, &discordgo.InteractionResponseData{Embeds: []*discordgo.MessageEmbed{b.statusEmbed(stats)}})
 }
 
-// handlePost creates or refreshes the public status message for an instance.
+// handlePost creates the public status message for a game.
 func (b *Bot) handlePost(ctx context.Context, i *discordgo.InteractionCreate, opts []*discordgo.ApplicationCommandInteractionDataOption) {
-	inst, ok := b.parseInstanceOpt(i, opts)
+	gameID, ok := b.parseGameOpt(i, opts)
 	if !ok {
 		return
 	}
 	if !b.requireBingoAdmin(ctx, i, "Only bingo admins can post the game status message.") {
 		return
 	}
-	stats, err := b.svc.GameStatsForInstance(ctx, i.GuildID, inst)
+	stats, err := b.svc.GameStatsForGame(ctx, i.GuildID, gameID)
 	if err != nil {
 		b.replyEphemeral(i, b.describeError(err))
 		return
 	}
 	msg, err := b.session.ChannelMessageSendComplex(i.ChannelID, &discordgo.MessageSend{
 		Embeds:     []*discordgo.MessageEmbed{b.statusEmbed(stats)},
-		Components: statusComponents(inst),
+		Components: statusComponents(gameID),
 	})
 	if err != nil {
 		b.replyEphemeral(i, "Could not post the status message.")
 		return
 	}
-	if err := b.svc.Store().UpsertTrackedMessage(ctx, i.GuildID, inst, store.MsgStatus, i.ChannelID, msg.ID); err != nil {
+	if err := b.svc.Store().UpsertTrackedMessage(ctx, i.GuildID, gameID, store.MsgStatus, i.ChannelID, msg.ID); err != nil {
 		b.log.Printf("track status message: %v", err)
 	}
 	b.replyEphemeral(i, "Posted a live status message here. It updates as players join and mark squares.")
@@ -168,14 +192,14 @@ func (b *Bot) handlePost(ctx context.Context, i *discordgo.InteractionCreate, op
 
 // handleInspect lets an admin pick a player and view their card read-only.
 func (b *Bot) handleInspect(ctx context.Context, i *discordgo.InteractionCreate, opts []*discordgo.ApplicationCommandInteractionDataOption) {
-	inst, ok := b.parseInstanceOpt(i, opts)
+	gameID, ok := b.parseGameOpt(i, opts)
 	if !ok {
 		return
 	}
 	if !b.requireBingoAdmin(ctx, i, "Only bingo admins can inspect players' cards.") {
 		return
 	}
-	stats, err := b.svc.GameStatsForInstance(ctx, i.GuildID, inst)
+	stats, err := b.svc.GameStatsForGame(ctx, i.GuildID, gameID)
 	if err != nil {
 		b.replyEphemeral(i, b.describeError(err))
 		return
@@ -197,12 +221,12 @@ func (b *Bot) handleInspect(ctx context.Context, i *discordgo.InteractionCreate,
 	}
 	b.respond(i, &discordgo.InteractionResponseData{
 		Flags:   discordgo.MessageFlagsEphemeral,
-		Content: fmt.Sprintf("Inspect a card for **%s** (read-only):", inst.Label()),
+		Content: fmt.Sprintf("Inspect a card for **%s** (read-only):", stats.Game.Name),
 		Components: []discordgo.MessageComponent{
 			discordgo.ActionsRow{Components: []discordgo.MessageComponent{
 				discordgo.SelectMenu{
 					MenuType: discordgo.StringSelectMenu,
-					CustomID: "inspect:" + string(inst),
+					CustomID: fmt.Sprintf("inspect:%d", gameID),
 					Options:  options,
 				},
 			}},
@@ -235,15 +259,17 @@ func (b *Bot) describeError(err error) string {
 	case errors.Is(err, service.ErrNoAnnounceChannel):
 		return "Set an announcement channel first with `/setup` - that is where win celebrations are posted. Games can then be started from any channel."
 	case errors.Is(err, bingo.ErrNotEnoughEntries):
-		return fmt.Sprintf("This instance does not have enough squares yet (%d are needed). A bingo admin can add more with `/bingo-data add`.", bingo.FillCount)
+		return fmt.Sprintf("The selected pools do not have enough squares yet (%d are needed). A bingo admin can add more with `/bingo-data add`.", bingo.FillCount)
+	case errors.Is(err, store.ErrNoPoolsSelected):
+		return "Select at least one pool to start a game."
 	case errors.Is(err, store.ErrGameNotOpen):
 		return "That game is not open."
 	case errors.Is(err, store.ErrGameOpen):
-		return "A game is already open for this instance."
+		return "A game with those pools is already open. Re-run `/bingo new replace:true` to abort it and start fresh."
 	case errors.Is(err, store.ErrNoBingo):
 		return "That card does not have a completed line yet."
 	case errors.Is(err, store.ErrNotFound):
-		return "There is no open game for this instance. A bingo admin can start one with `/bingo new`."
+		return "That game could not be found - it may have finished. A bingo admin can start one with `/bingo new`."
 	case errors.Is(err, store.ErrValidation):
 		return err.Error()
 	default:

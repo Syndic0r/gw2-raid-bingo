@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/Syndic0r/gw2-raid-bingo/internal/authz"
-	"github.com/Syndic0r/gw2-raid-bingo/internal/bingo"
 	"github.com/Syndic0r/gw2-raid-bingo/internal/events"
 	"github.com/Syndic0r/gw2-raid-bingo/internal/store"
 )
@@ -50,11 +49,7 @@ func seed(t *testing.T, st *store.Store) int64 {
 	if err := st.SetAnnounceChannel(ctx, guild, "announce-chan"); err != nil {
 		t.Fatal(err)
 	}
-	inst, _ := st.InstancePool(ctx, guild, bingo.W1)
-	if _, err := st.AddEntry(ctx, guild, inst.ID, "w1 square"); err != nil {
-		t.Fatal(err)
-	}
-	shared, _ := st.CreateSharedPool(ctx, guild, "general", "General")
+	shared, _ := st.CreatePool(ctx, guild, "general", "General")
 	for i := 0; i < 30; i++ {
 		st.AddEntry(ctx, guild, shared.ID, "shared "+string(rune('a'+i)))
 	}
@@ -66,10 +61,10 @@ func TestNewGameRequiresAdmin(t *testing.T) {
 	sharedID := seed(t, st)
 	ctx := context.Background()
 
-	if _, err := svc.NewGame(ctx, guild, "rando", bingo.W1, []int64{sharedID}, false); !errors.Is(err, ErrForbidden) {
+	if _, err := svc.NewGame(ctx, guild, "rando", "", []int64{sharedID}, false); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("non-admin NewGame: got %v, want ErrForbidden", err)
 	}
-	if _, err := svc.NewGame(ctx, guild, "admin", bingo.W1, []int64{sharedID}, false); err != nil {
+	if _, err := svc.NewGame(ctx, guild, "admin", "", []int64{sharedID}, false); err != nil {
 		t.Fatalf("admin NewGame: %v", err)
 	}
 }
@@ -81,20 +76,18 @@ func TestNewGameRequiresAnnounceChannel(t *testing.T) {
 	if err := st.EnsureGuild(ctx, guild); err != nil {
 		t.Fatal(err)
 	}
-	inst, _ := st.InstancePool(ctx, guild, bingo.W1)
-	st.AddEntry(ctx, guild, inst.ID, "w1 square")
-	shared, _ := st.CreateSharedPool(ctx, guild, "general", "General")
+	shared, _ := st.CreatePool(ctx, guild, "general", "General")
 	for i := 0; i < 30; i++ {
 		st.AddEntry(ctx, guild, shared.ID, "shared "+string(rune('a'+i)))
 	}
-	if _, err := svc.NewGame(ctx, guild, "admin", bingo.W1, []int64{shared.ID}, false); !errors.Is(err, ErrNoAnnounceChannel) {
+	if _, err := svc.NewGame(ctx, guild, "admin", "", []int64{shared.ID}, false); !errors.Is(err, ErrNoAnnounceChannel) {
 		t.Fatalf("got %v, want ErrNoAnnounceChannel", err)
 	}
 	// Once a channel is set, it works.
 	if err := st.SetAnnounceChannel(ctx, guild, "chan"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.NewGame(ctx, guild, "admin", bingo.W1, []int64{shared.ID}, false); err != nil {
+	if _, err := svc.NewGame(ctx, guild, "admin", "", []int64{shared.ID}, false); err != nil {
 		t.Fatalf("after channel set: %v", err)
 	}
 }
@@ -104,12 +97,13 @@ func TestDealAndPlayThroughService(t *testing.T) {
 	sharedID := seed(t, st)
 	ctx := context.Background()
 
-	if _, err := svc.NewGame(ctx, guild, "admin", bingo.W1, []int64{sharedID}, false); err != nil {
+	game, err := svc.NewGame(ctx, guild, "admin", "", []int64{sharedID}, false)
+	if err != nil {
 		t.Fatal(err)
 	}
 
 	// A plain member can deal a card.
-	card, _, err := svc.DealCard(ctx, guild, "player1", bingo.W1)
+	card, _, err := svc.DealCard(ctx, guild, "player1", game.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,6 +150,7 @@ func TestImportRequiresAdminAndCounts(t *testing.T) {
 	if err := st.EnsureGuild(context.Background(), guild); err != nil {
 		t.Fatal(err)
 	}
+	// "w2" already exists as a default wing pool; "memes" is created on import.
 	data := store.SeedData{
 		Instance: map[string][]string{"w2": {"a", "b"}},
 		Shared:   map[string][]string{"memes": {"x", "y", "z"}},
@@ -176,11 +171,11 @@ func TestGameStats(t *testing.T) {
 	svc, st := newSvc(t, "admin")
 	sharedID := seed(t, st)
 	ctx := context.Background()
-	svc.NewGame(ctx, guild, "admin", bingo.W1, []int64{sharedID}, false)
-	svc.DealCard(ctx, guild, "p1", bingo.W1)
-	svc.DealCard(ctx, guild, "p2", bingo.W1)
+	game, _ := svc.NewGame(ctx, guild, "admin", "", []int64{sharedID}, false)
+	svc.DealCard(ctx, guild, "p1", game.ID)
+	svc.DealCard(ctx, guild, "p2", game.ID)
 
-	stats, err := svc.GameStatsForInstance(ctx, guild, bingo.W1)
+	stats, err := svc.GameStatsForGame(ctx, guild, game.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

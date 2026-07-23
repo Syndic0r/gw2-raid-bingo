@@ -15,9 +15,8 @@ const (
 	FreeText  = "Free!"
 )
 
-// ErrNotEnoughEntries is returned by GenerateCard when the instance and enabled
-// shared pools together offer fewer than FillCount distinct entries, so a full
-// card cannot be dealt.
+// ErrNotEnoughEntries is returned by GenerateCard when the selected pools together
+// offer fewer than FillCount distinct entries, so a full card cannot be dealt.
 var ErrNotEnoughEntries = errors.New("not enough entries to fill a card")
 
 // Entry is one candidate square drawn from a pool. ID is the store's primary key
@@ -42,36 +41,19 @@ type Card struct {
 	Cells []Cell
 }
 
-// GenerateCard deals a card for one player.
-//
-// Every distinct instance entry is guaranteed a place (they are the themed
-// squares); if the instance alone offers more than FillCount, FillCount of them
-// are sampled. Any remaining cells are filled with a uniform random draw from
-// the shared entries. The chosen squares are then shuffled into a random layout
-// with the free centre inserted at CenterIdx.
-//
-// Entries are de-duplicated by ID across both inputs, so passing overlapping
-// slices cannot place the same square twice. r supplies all randomness, making
-// generation deterministic and unit-testable.
-func GenerateCard(instanceEntries, sharedEntries []Entry, r *rand.Rand) (*Card, error) {
-	instance := dedupe(instanceEntries, nil)
-	seen := make(map[int64]struct{}, len(instance))
-	for _, e := range instance {
-		seen[e.ID] = struct{}{}
+// GenerateCard deals a card for one player from the union of the selected pools'
+// entries. The entries are de-duplicated by ID (so overlapping pools cannot place
+// the same square twice), FillCount of them are sampled uniformly at random, and
+// the chosen squares are shuffled into a random layout with the free centre at
+// CenterIdx. It returns ErrNotEnoughEntries if fewer than FillCount distinct
+// entries are available. r supplies all randomness, making generation
+// deterministic and unit-testable.
+func GenerateCard(entries []Entry, r *rand.Rand) (*Card, error) {
+	pool := dedupe(entries, nil)
+	if len(pool) < FillCount {
+		return nil, ErrNotEnoughEntries
 	}
-	shared := dedupe(sharedEntries, seen)
-
-	var chosen []Entry
-	if len(instance) >= FillCount {
-		chosen = sample(instance, FillCount, r)
-	} else {
-		need := FillCount - len(instance)
-		if len(shared) < need {
-			return nil, ErrNotEnoughEntries
-		}
-		chosen = append(chosen, instance...)
-		chosen = append(chosen, sample(shared, need, r)...)
-	}
+	chosen := sample(pool, FillCount, r)
 
 	r.Shuffle(len(chosen), func(i, j int) { chosen[i], chosen[j] = chosen[j], chosen[i] })
 
@@ -89,16 +71,11 @@ func GenerateCard(instanceEntries, sharedEntries []Entry, r *rand.Rand) (*Card, 
 	return &Card{Cells: cells}, nil
 }
 
-// UsableEntryCount reports how many distinct entries the instance and shared
-// pools jointly provide, so callers can pre-check whether a card can be dealt
-// (>= FillCount) and give a clear "add more entries" message otherwise.
-func UsableEntryCount(instanceEntries, sharedEntries []Entry) int {
-	instance := dedupe(instanceEntries, nil)
-	seen := make(map[int64]struct{}, len(instance))
-	for _, e := range instance {
-		seen[e.ID] = struct{}{}
-	}
-	return len(instance) + len(dedupe(sharedEntries, seen))
+// UsableEntryCount reports how many distinct entries the selected pools jointly
+// provide, so callers can pre-check whether a card can be dealt (>= FillCount) and
+// give a clear "add more entries" message otherwise.
+func UsableEntryCount(entries []Entry) int {
+	return len(dedupe(entries, nil))
 }
 
 // dedupe returns the entries whose IDs are unique and not already in exclude,

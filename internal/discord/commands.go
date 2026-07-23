@@ -2,29 +2,17 @@ package discord
 
 import (
 	"github.com/bwmarrin/discordgo"
-
-	"github.com/Syndic0r/gw2-raid-bingo/internal/bingo"
 )
 
-// instanceChoices builds the slash-command choices for the instance option.
-func instanceChoices() []*discordgo.ApplicationCommandOptionChoice {
-	out := make([]*discordgo.ApplicationCommandOptionChoice, 0, len(bingo.Instances()))
-	for _, inst := range bingo.Instances() {
-		out = append(out, &discordgo.ApplicationCommandOptionChoice{
-			Name:  inst.Label(),
-			Value: string(inst),
-		})
-	}
-	return out
-}
-
-func instanceOption(required bool) *discordgo.ApplicationCommandOption {
+// gameRefOption is an open-game reference: an autocomplete field whose value is a
+// game id. The autocomplete lists the guild's open games by name.
+func gameRefOption() *discordgo.ApplicationCommandOption {
 	return &discordgo.ApplicationCommandOption{
-		Type:        discordgo.ApplicationCommandOptionString,
-		Name:        "instance",
-		Description: "Which raid wing or encounter",
-		Required:    required,
-		Choices:     instanceChoices(),
+		Type:         discordgo.ApplicationCommandOptionString,
+		Name:         "game",
+		Description:  "Which open game (type to search)",
+		Required:     true,
+		Autocomplete: true,
 	}
 }
 
@@ -42,25 +30,24 @@ func commandDefs() []*discordgo.ApplicationCommand {
 				{
 					Type:        discordgo.ApplicationCommandOptionSubCommand,
 					Name:        "card",
-					Description: "Get your bingo card for the open game",
-					Options:     []*discordgo.ApplicationCommandOption{instanceOption(true)},
+					Description: "Get your bingo card for an open game",
+					Options:     []*discordgo.ApplicationCommandOption{gameRefOption()},
 				},
 				{
 					Type:        discordgo.ApplicationCommandOptionSubCommand,
 					Name:        "status",
 					Description: "Show stats and the website link for a game",
-					Options:     []*discordgo.ApplicationCommandOption{instanceOption(true)},
+					Options:     []*discordgo.ApplicationCommandOption{gameRefOption()},
 				},
 				{
 					Type:        discordgo.ApplicationCommandOptionSubCommand,
 					Name:        "new",
-					Description: "Open a new game for an instance (bingo admins)",
+					Description: "Open a new game - pick the pools to play (bingo admins)",
 					Options: []*discordgo.ApplicationCommandOption{
-						instanceOption(true),
 						{
 							Type:        discordgo.ApplicationCommandOptionBoolean,
 							Name:        "replace",
-							Description: "If a game is already open, abort it and start fresh",
+							Description: "If a game with the same pools is open, abort it and start fresh",
 							Required:    false,
 						},
 					},
@@ -68,25 +55,25 @@ func commandDefs() []*discordgo.ApplicationCommand {
 				{
 					Type:        discordgo.ApplicationCommandOptionSubCommand,
 					Name:        "abort",
-					Description: "Abort the open game for an instance (bingo admins)",
-					Options:     []*discordgo.ApplicationCommandOption{instanceOption(true)},
+					Description: "Abort an open game (bingo admins)",
+					Options:     []*discordgo.ApplicationCommandOption{gameRefOption()},
 				},
 				{
 					Type:        discordgo.ApplicationCommandOptionSubCommand,
 					Name:        "post",
 					Description: "Post a live game status message players can join from (bingo admins)",
-					Options:     []*discordgo.ApplicationCommandOption{instanceOption(true)},
+					Options:     []*discordgo.ApplicationCommandOption{gameRefOption()},
 				},
 				{
 					Type:        discordgo.ApplicationCommandOptionSubCommand,
 					Name:        "cards",
 					Description: "Inspect players' cards for a game, read-only (bingo admins)",
-					Options:     []*discordgo.ApplicationCommandOption{instanceOption(true)},
+					Options:     []*discordgo.ApplicationCommandOption{gameRefOption()},
 				},
 				{
 					Type:        discordgo.ApplicationCommandOptionSubCommand,
 					Name:        "schedule",
-					Description: "Schedule games to open later, for chosen instances (bingo admins)",
+					Description: "Schedule a game to open later - pick the pools (bingo admins)",
 					Options: []*discordgo.ApplicationCommandOption{
 						{Type: discordgo.ApplicationCommandOptionString, Name: "in", Description: "Open after a delay, e.g. 2h30m, 90m, 1d", Required: false},
 						{Type: discordgo.ApplicationCommandOptionString, Name: "at", Description: "Open at a date-time, e.g. 2026-07-20 20:00", Required: false},
@@ -116,7 +103,7 @@ func commandDefs() []*discordgo.ApplicationCommand {
 				{
 					Type:        discordgo.ApplicationCommandOptionSubCommand,
 					Name:        "pool-add",
-					Description: "Create a shared pool of squares mixed into every card",
+					Description: "Create a pool of squares to build games from",
 					Options: []*discordgo.ApplicationCommandOption{
 						{Type: discordgo.ApplicationCommandOptionString, Name: "slug", Description: "Short id, a-z 0-9 hyphens", Required: true},
 						{Type: discordgo.ApplicationCommandOptionString, Name: "name", Description: "Display name", Required: true},
@@ -176,13 +163,13 @@ func commandDefs() []*discordgo.ApplicationCommand {
 	}
 }
 
-// poolRefOption is a free-text pool reference: an instance key (w1..htcm) or a
-// shared pool slug. It is validated server-side against the guild's pools.
+// poolRefOption is a pool reference by slug, validated server-side against the
+// guild's pools. Autocomplete offers every pool the guild has.
 func poolRefOption() *discordgo.ApplicationCommandOption {
 	return &discordgo.ApplicationCommandOption{
 		Type:         discordgo.ApplicationCommandOptionString,
 		Name:         "pool",
-		Description:  "Pick a pool - the static wings/encounters and your shared pools all appear",
+		Description:  "Pick a pool (type to search)",
 		Required:     true,
 		Autocomplete: true,
 	}

@@ -12,7 +12,6 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 
-	"github.com/Syndic0r/gw2-raid-bingo/internal/bingo"
 	"github.com/Syndic0r/gw2-raid-bingo/internal/store"
 )
 
@@ -28,12 +27,12 @@ func (b *Bot) handleData(ctx context.Context, i *discordgo.InteractionCreate) {
 	case "pool-add":
 		slug := optString(opts, "slug")
 		name := optString(opts, "name")
-		pool, err := b.svc.CreateSharedPool(ctx, i.GuildID, userID, slug, name)
+		pool, err := b.svc.CreatePool(ctx, i.GuildID, userID, slug, name)
 		if err != nil {
 			b.replyEphemeral(i, b.describeError(err))
 			return
 		}
-		b.replyEphemeralf(i, "Created shared pool **%s** (`%s`). Add squares with `/bingo-data add pool:%s`.", pool.Name, pool.Slug, pool.Slug)
+		b.replyEphemeralf(i, "Created pool **%s** (`%s`). Add squares with `/bingo-data add pool:%s`.", pool.Name, pool.Slug, pool.Slug)
 	case "add":
 		b.handleDataAdd(ctx, i, opts, userID)
 	case "list":
@@ -51,19 +50,15 @@ func (b *Bot) handleData(ctx context.Context, i *discordgo.InteractionCreate) {
 	}
 }
 
-// resolvePool resolves a pool reference (instance key or shared slug) to a pool.
+// resolvePool resolves a pool reference (slug) to a pool.
 func (b *Bot) resolvePool(ctx context.Context, guildID, ref string) (store.Pool, error) {
-	ref = strings.ToLower(strings.TrimSpace(ref))
-	if inst, err := bingo.ParseInstance(ref); err == nil {
-		return b.svc.Store().InstancePool(ctx, guildID, inst)
-	}
-	return b.svc.Store().GetPool(ctx, guildID, store.KindShared, ref)
+	return b.svc.Store().GetPool(ctx, guildID, strings.ToLower(strings.TrimSpace(ref)))
 }
 
 func (b *Bot) handleDataAdd(ctx context.Context, i *discordgo.InteractionCreate, opts []*discordgo.ApplicationCommandInteractionDataOption, userID string) {
 	pool, err := b.resolvePool(ctx, i.GuildID, optString(opts, "pool"))
 	if err != nil {
-		b.replyEphemeral(i, "No such pool. Use an instance key (w1..htcm) or a shared pool slug.")
+		b.replyEphemeral(i, "No such pool. Pick one from the dropdown (or create it with `/bingo-data pool-add`).")
 		return
 	}
 	entry, err := b.svc.AddEntry(ctx, i.GuildID, userID, pool.ID, optString(opts, "text"))
@@ -191,32 +186,25 @@ func (b *Bot) handleDataExport(ctx context.Context, i *discordgo.InteractionCrea
 	if !b.requireBingoAdmin(ctx, i, "Only bingo admins can export pool data.") {
 		return
 	}
-	out := store.SeedData{
-		Instance: map[string][]string{},
-		Shared:   map[string][]string{},
+	// Export every pool under the `shared` bucket (the import side treats both
+	// buckets as ordinary pools; a single bucket keeps the file simplest).
+	out := store.SeedData{Shared: map[string][]string{}}
+	pools, err := b.svc.Store().ListPools(ctx, i.GuildID)
+	if err != nil {
+		b.replyEphemeral(i, b.describeError(err))
+		return
 	}
-	for _, kind := range []string{store.KindInstance, store.KindShared} {
-		pools, err := b.svc.Store().ListPools(ctx, i.GuildID, kind)
+	for _, p := range pools {
+		entries, err := b.svc.Store().ListEntries(ctx, i.GuildID, p.ID, true)
 		if err != nil {
 			b.replyEphemeral(i, b.describeError(err))
 			return
 		}
-		for _, p := range pools {
-			entries, err := b.svc.Store().ListEntries(ctx, i.GuildID, p.ID, true)
-			if err != nil {
-				b.replyEphemeral(i, b.describeError(err))
-				return
-			}
-			texts := make([]string, 0, len(entries))
-			for _, e := range entries {
-				texts = append(texts, e.Text)
-			}
-			if kind == store.KindInstance {
-				out.Instance[p.Slug] = texts
-			} else {
-				out.Shared[p.Slug] = texts
-			}
+		texts := make([]string, 0, len(entries))
+		for _, e := range entries {
+			texts = append(texts, e.Text)
 		}
+		out.Shared[p.Slug] = texts
 	}
 	payload, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {

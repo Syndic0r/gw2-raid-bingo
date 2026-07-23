@@ -10,8 +10,8 @@ import (
 func gameJSON(g store.Game) map[string]any {
 	return map[string]any{
 		"id":         g.ID,
-		"instance":   string(g.Instance),
-		"label":      g.Instance.Label(),
+		"name":       g.Name,
+		"poolIds":    g.PoolIDs,
 		"status":     g.Status,
 		"createdAt":  g.CreatedAt,
 		"finishedAt": g.FinishedAt,

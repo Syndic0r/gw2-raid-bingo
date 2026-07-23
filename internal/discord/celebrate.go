@@ -5,8 +5,6 @@ import (
 	"fmt"
 
 	"github.com/bwmarrin/discordgo"
-
-	"github.com/Syndic0r/gw2-raid-bingo/internal/bingo"
 )
 
 // formatDuration renders a whole-second span as a spaced, readable string:
@@ -41,12 +39,12 @@ func formatDuration(seconds int64) string {
 
 // celebrate posts the win announcement to the guild's configured announcement
 // channel: a message, the winning card image, and a few stats. Best-effort.
-func (b *Bot) celebrate(ctx context.Context, guildID string, inst bingo.Instance, winningCardID int64) {
+func (b *Bot) celebrate(ctx context.Context, guildID string, gameID, winningCardID int64) {
 	settings, err := b.svc.Store().GetGuildSettings(ctx, guildID)
 	if err != nil || settings.AnnounceChannelID == "" {
 		return // nowhere configured to celebrate
 	}
-	game, err := b.svc.Store().LatestGame(ctx, guildID, inst)
+	game, err := b.svc.Store().GetGame(ctx, guildID, gameID)
 	if err != nil {
 		b.log.Printf("celebrate: load game: %v", err)
 		return
@@ -58,7 +56,7 @@ func (b *Bot) celebrate(ctx context.Context, guildID string, inst bingo.Instance
 	}
 
 	view := cardView{
-		title:    "BINGO! - " + inst.Label(),
+		title:    "BINGO! - " + game.Name,
 		subtitle: "Winning card",
 		card:     card,
 		readOnly: true,
@@ -75,14 +73,14 @@ func (b *Bot) celebrate(ctx context.Context, guildID string, inst bingo.Instance
 	}
 	embed := &discordgo.MessageEmbed{
 		Title:       "🎉 Bingo!",
-		Description: fmt.Sprintf("<@%s> won **%s** bingo%s!", game.WinnerUserID, inst.Label(), duration),
+		Description: fmt.Sprintf("<@%s> won **%s**%s!", game.WinnerUserID, game.Name, duration),
 		Color:       0xf1c40f,
 	}
 
 	// Ping the participant role (if configured) so everyone knows the round
 	// ended, and always ping the winner. AllowedMentions is set explicitly so
 	// only these two are ever pinged - never @everyone.
-	content := fmt.Sprintf("🎉 <@%s> called **BINGO** for %s!", game.WinnerUserID, inst.Label())
+	content := fmt.Sprintf("🎉 <@%s> called **BINGO** for %s!", game.WinnerUserID, game.Name)
 	allowed := &discordgo.MessageAllowedMentions{Users: []string{game.WinnerUserID}}
 	if settings.ParticipantRoleID != "" {
 		content = fmt.Sprintf("<@&%s> ", settings.ParticipantRoleID) + content

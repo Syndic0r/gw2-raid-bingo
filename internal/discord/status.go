@@ -7,7 +7,6 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 
-	"github.com/Syndic0r/gw2-raid-bingo/internal/bingo"
 	"github.com/Syndic0r/gw2-raid-bingo/internal/events"
 	"github.com/Syndic0r/gw2-raid-bingo/internal/service"
 	"github.com/Syndic0r/gw2-raid-bingo/internal/store"
@@ -15,9 +14,8 @@ import (
 
 // statusEmbed renders a game's live status as an embed.
 func (b *Bot) statusEmbed(stats service.GameStats) *discordgo.MessageEmbed {
-	inst := stats.Game.Instance
 	e := &discordgo.MessageEmbed{
-		Title: "Raid Bingo - " + inst.Label(),
+		Title: "Raid Bingo - " + stats.Game.Name,
 		Color: 0x2ecc71,
 	}
 	var desc strings.Builder
@@ -49,12 +47,12 @@ func (b *Bot) statusEmbed(stats service.GameStats) *discordgo.MessageEmbed {
 // announceGameOpen posts a heads-up to the guild's announcement channel that a
 // game just started, pinging the participant role if one is configured so
 // players are notified. Used for both manually opened and scheduled games.
-func (b *Bot) announceGameOpen(ctx context.Context, guildID string, inst bingo.Instance) {
+func (b *Bot) announceGameOpen(ctx context.Context, guildID string, game store.Game) {
 	settings, err := b.svc.Store().GetGuildSettings(ctx, guildID)
 	if err != nil || settings.AnnounceChannelID == "" {
 		return
 	}
-	content := fmt.Sprintf("🎲 A new **%s** bingo game just started! Run `/bingo card instance:%s` to join.", inst.Label(), inst)
+	content := fmt.Sprintf("🎲 A new bingo game **%s** just started! Run `/bingo card` and pick it to join.", game.Name)
 	allowed := &discordgo.MessageAllowedMentions{}
 	if settings.ParticipantRoleID != "" {
 		content = fmt.Sprintf("<@&%s> ", settings.ParticipantRoleID) + content
@@ -73,12 +71,12 @@ func (b *Bot) announceGameOpen(ctx context.Context, guildID string, inst bingo.I
 
 // announceGameAborted tells the channel a game was ended without a winner, so
 // players know the round is over and their cards are now read-only.
-func (b *Bot) announceGameAborted(ctx context.Context, guildID string, inst bingo.Instance) {
+func (b *Bot) announceGameAborted(ctx context.Context, guildID string, game store.Game) {
 	settings, err := b.svc.Store().GetGuildSettings(ctx, guildID)
 	if err != nil || settings.AnnounceChannelID == "" {
 		return
 	}
-	content := fmt.Sprintf("🛑 The **%s** bingo game was aborted. No winner this round; cards are now read-only.", inst.Label())
+	content := fmt.Sprintf("🛑 The bingo game **%s** was aborted. No winner this round; cards are now read-only.", game.Name)
 	allowed := &discordgo.MessageAllowedMentions{}
 	if settings.ParticipantRoleID != "" {
 		content = fmt.Sprintf("<@&%s> ", settings.ParticipantRoleID) + content
@@ -92,29 +90,27 @@ func (b *Bot) announceGameAborted(ctx context.Context, guildID string, inst bing
 	}
 }
 
-// statusComponents is the "Deal me in" button attached to a status message.
-func statusComponents(inst bingo.Instance) []discordgo.MessageComponent {
+// statusComponents is the "Deal me in" button attached to a game's status message.
+func statusComponents(gameID int64) []discordgo.MessageComponent {
 	return []discordgo.MessageComponent{
 		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-			discordgo.Button{Label: "Deal me in / My card", Style: discordgo.PrimaryButton, CustomID: "deal:" + string(inst)},
+			discordgo.Button{Label: "Deal me in / My card", Style: discordgo.PrimaryButton, CustomID: fmt.Sprintf("deal:%d", gameID)},
 		}},
 	}
 }
 
-// refreshStatusMessage re-renders the tracked status message for an instance, if
-// one exists. Best-effort: failures are logged, not surfaced.
-func (b *Bot) refreshStatusMessage(ctx context.Context, guildID string, inst bingo.Instance) {
-	tracked, err := b.svc.Store().GetTrackedMessage(ctx, guildID, inst, store.MsgStatus)
+// refreshStatusMessage re-renders the tracked status message for a game, if one
+// exists. Best-effort: failures are logged, not surfaced.
+func (b *Bot) refreshStatusMessage(ctx context.Context, guildID string, gameID int64) {
+	tracked, err := b.svc.Store().GetTrackedMessage(ctx, guildID, gameID, store.MsgStatus)
 	if err != nil {
-		return // no status message posted for this instance
+		return // no status message posted for this game
 	}
-	stats, err := b.svc.GameStatsForInstance(ctx, guildID, inst)
+	stats, err := b.svc.GameStatsForGame(ctx, guildID, gameID)
 	if err != nil {
-		// Game may be finished/aborted; fall back to the most recent game view is
-		// out of scope here, so just leave the message as-is.
-		return
+		return // leave the message as-is on error
 	}
-	components := statusComponents(inst)
+	components := statusComponents(gameID)
 	if stats.Game.Status != store.StatusOpen {
 		components = nil // no joining once the game is closed
 	}
@@ -153,19 +149,24 @@ func (b *Bot) startEventBridge(ctx context.Context) {
 }
 
 func (b *Bot) onEvent(ctx context.Context, e events.Event) {
-	inst := bingo.Instance(e.Instance)
-	if !inst.Valid() {
+	if e.GameID == 0 {
 		return
 	}
-	b.refreshStatusMessage(ctx, e.GuildID, inst)
+	b.refreshStatusMessage(ctx, e.GuildID, e.GameID)
 	// Announce from here so a new game started ANYWHERE - a Discord command, the
 	// website, or the scheduler - posts to the configured channel exactly once.
 	switch e.Kind {
-	case events.GameOpened:
-		b.announceGameOpen(ctx, e.GuildID, inst)
-	case events.GameAborted:
-		b.announceGameAborted(ctx, e.GuildID, inst)
+	case events.GameOpened, events.GameAborted:
+		game, err := b.svc.Store().GetGame(ctx, e.GuildID, e.GameID)
+		if err != nil {
+			return
+		}
+		if e.Kind == events.GameOpened {
+			b.announceGameOpen(ctx, e.GuildID, game)
+		} else {
+			b.announceGameAborted(ctx, e.GuildID, game)
+		}
 	case events.GameFinished:
-		b.celebrate(ctx, e.GuildID, inst, e.CardID)
+		b.celebrate(ctx, e.GuildID, e.GameID, e.CardID)
 	}
 }

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/Syndic0r/gw2-raid-bingo/internal/bingo"
 	"github.com/Syndic0r/gw2-raid-bingo/internal/service"
@@ -85,41 +87,82 @@ func (s *Server) requireMember(w http.ResponseWriter, r *http.Request, guildID s
 	return sess.UserID, true
 }
 
-// handleBoard returns the open game, the user's card, and stats for an instance.
+// handleGames lists the guild's open games (and, for admins, the pools available
+// to build a new game from).
+func (s *Server) handleGames(w http.ResponseWriter, r *http.Request) {
+	gid := r.PathValue("gid")
+	userID, ok := s.requireMember(w, r, gid)
+	if !ok {
+		return
+	}
+	admin, _ := s.svc.IsAdmin(r.Context(), gid, userID)
+	games, err := s.store.ListOpenGames(r.Context(), gid)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load games")
+		return
+	}
+	out := make([]map[string]any, 0, len(games))
+	for _, g := range games {
+		cards, _ := s.store.ListCards(r.Context(), gid, g.ID)
+		gj := gameJSON(g)
+		gj["players"] = len(cards)
+		out = append(out, gj)
+	}
+	resp := map[string]any{"games": out, "admin": admin}
+	if admin {
+		pools, err := s.poolsBrief(r, gid)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "could not load pools")
+			return
+		}
+		resp["pools"] = pools
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// parseGameID reads a positive game id from the "game" query parameter.
+func parseGameID(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	id, err := strconv.ParseInt(r.URL.Query().Get("game"), 10, 64)
+	if err != nil || id <= 0 {
+		writeError(w, http.StatusBadRequest, "invalid game id")
+		return 0, false
+	}
+	return id, true
+}
+
+// handleBoard returns a specific game, the user's card, and stats.
 func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 	gid := r.PathValue("gid")
 	userID, ok := s.requireMember(w, r, gid)
 	if !ok {
 		return
 	}
-	inst, err := bingo.ParseInstance(r.URL.Query().Get("instance"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid instance")
+	gameID, ok := parseGameID(w, r)
+	if !ok {
 		return
 	}
 	admin, _ := s.svc.IsAdmin(r.Context(), gid, userID)
 
-	resp := map[string]any{"instance": string(inst), "admin": admin}
-
-	game, err := s.store.GetOpenGame(r.Context(), gid, inst)
+	game, err := s.store.GetGame(r.Context(), gid, gameID)
 	if errors.Is(err, store.ErrNotFound) {
-		resp["game"] = nil
-		writeJSON(w, http.StatusOK, resp)
+		writeJSON(w, http.StatusOK, map[string]any{"game": nil, "admin": admin})
 		return
 	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load game")
 		return
 	}
-	stats, err := s.svc.GameStatsForInstance(r.Context(), gid, inst)
+	stats, err := s.svc.GameStatsForGame(r.Context(), gid, gameID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load stats")
 		return
 	}
-	resp["game"] = gameJSON(game)
-	resp["players"] = stats.PlayerCount
-	resp["leaders"] = leadersJSON(stats.Leaders)
-
+	resp := map[string]any{
+		"admin":   admin,
+		"game":    gameJSON(game),
+		"players": stats.PlayerCount,
+		"leaders": leadersJSON(stats.Leaders),
+	}
 	if card, err := s.store.GetUserCard(r.Context(), game.ID, userID); err == nil {
 		resp["card"] = cardJSON(card)
 		resp["hasBingo"] = bingo.HasBingo(card.Marks())
@@ -147,7 +190,7 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"games": out})
 }
 
-// handleDeal deals (or returns) the user's card for an instance's open game.
+// handleDeal deals (or returns) the user's card for a game.
 func (s *Server) handleDeal(w http.ResponseWriter, r *http.Request) {
 	gid := r.PathValue("gid")
 	userID, ok := s.requireMember(w, r, gid)
@@ -155,17 +198,12 @@ func (s *Server) handleDeal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Instance string `json:"instance"`
+		GameID int64 `json:"gameId"`
 	}
 	if !decodeBody(w, r, &body) {
 		return
 	}
-	inst, err := bingo.ParseInstance(body.Instance)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid instance")
-		return
-	}
-	card, _, err := s.svc.DealCard(r.Context(), gid, userID, inst)
+	card, _, err := s.svc.DealCard(r.Context(), gid, userID, body.GameID)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -213,10 +251,10 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"won": true, "instance": string(res.Game.Instance)})
+	writeJSON(w, http.StatusOK, map[string]any{"won": true, "gameId": res.Game.ID})
 }
 
-// handleNewGame opens a game (admin only).
+// handleNewGame opens a game from a selected set of pools (admin only).
 func (s *Server) handleNewGame(w http.ResponseWriter, r *http.Request) {
 	gid := r.PathValue("gid")
 	userID, ok := s.requireMember(w, r, gid)
@@ -224,23 +262,14 @@ func (s *Server) handleNewGame(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Instance string `json:"instance"`
-		Replace  bool   `json:"replace"`
+		PoolIDs []int64 `json:"poolIds"`
+		Name    string  `json:"name"`
+		Replace bool    `json:"replace"`
 	}
 	if !decodeBody(w, r, &body) {
 		return
 	}
-	inst, err := bingo.ParseInstance(body.Instance)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid instance")
-		return
-	}
-	pools, err := s.svc.AllSharedPoolIDs(r.Context(), gid)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load pools")
-		return
-	}
-	game, err := s.svc.NewGame(r.Context(), gid, userID, inst, pools, body.Replace)
+	game, err := s.svc.NewGame(r.Context(), gid, userID, body.Name, body.PoolIDs, body.Replace)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -248,7 +277,7 @@ func (s *Server) handleNewGame(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"game": gameJSON(game)})
 }
 
-// handleAbortGame aborts the open game for an instance (admin only).
+// handleAbortGame aborts a specific open game (admin only).
 func (s *Server) handleAbortGame(w http.ResponseWriter, r *http.Request) {
 	gid := r.PathValue("gid")
 	userID, ok := s.requireMember(w, r, gid)
@@ -256,17 +285,12 @@ func (s *Server) handleAbortGame(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Instance string `json:"instance"`
+		GameID int64 `json:"gameId"`
 	}
 	if !decodeBody(w, r, &body) {
 		return
 	}
-	inst, err := bingo.ParseInstance(body.Instance)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid instance")
-		return
-	}
-	if _, err := s.svc.AbortGame(r.Context(), gid, userID, inst); err != nil {
+	if _, err := s.svc.AbortGame(r.Context(), gid, userID, body.GameID); err != nil {
 		writeServiceError(w, err)
 		return
 	}
@@ -281,17 +305,23 @@ func writeServiceError(w http.ResponseWriter, err error) {
 	case errors.Is(err, service.ErrNoAnnounceChannel):
 		writeError(w, http.StatusBadRequest, "set an announcement channel in Discord with /setup first")
 	case errors.Is(err, bingo.ErrNotEnoughEntries):
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("not enough squares for this instance yet (%d needed)", bingo.FillCount))
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("not enough squares in the selected pools yet (%d needed)", bingo.FillCount))
+	case errors.Is(err, store.ErrNoPoolsSelected):
+		writeError(w, http.StatusBadRequest, "select at least one pool to start a game")
 	case errors.Is(err, store.ErrGameNotOpen):
 		writeError(w, http.StatusConflict, "that game is not open")
 	case errors.Is(err, store.ErrGameOpen):
-		writeError(w, http.StatusConflict, "a game is already open for this instance")
+		writeError(w, http.StatusConflict, "a game with these pools is already open")
 	case errors.Is(err, store.ErrNoBingo):
 		writeError(w, http.StatusBadRequest, "that card has no completed line yet")
 	case errors.Is(err, store.ErrCellFree):
 		writeError(w, http.StatusBadRequest, "the free centre cannot be toggled")
 	case errors.Is(err, store.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not found")
+	case errors.Is(err, store.ErrValidation):
+		// Surface the user-facing reason (e.g. "the selected pools have only N
+		// unique squares..."), stripping the internal "validation: " prefix.
+		writeError(w, http.StatusBadRequest, strings.TrimPrefix(err.Error(), "validation: "))
 	default:
 		writeError(w, http.StatusInternalServerError, "something went wrong")
 	}

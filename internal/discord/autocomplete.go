@@ -7,14 +7,10 @@ import (
 	"unicode/utf8"
 
 	"github.com/bwmarrin/discordgo"
-
-	"github.com/Syndic0r/gw2-raid-bingo/internal/bingo"
-	"github.com/Syndic0r/gw2-raid-bingo/internal/store"
 )
 
-// routeAutocomplete answers slash-command autocomplete requests. Currently only
-// the "pool" option is autocompleted, offering every pool that exists so an admin
-// never has to guess a slug.
+// routeAutocomplete answers slash-command autocomplete requests: the "game" option
+// lists a guild's open games, and "pool"/"square" help pick pools and their squares.
 func (b *Bot) routeAutocomplete(ctx context.Context, i *discordgo.InteractionCreate) {
 	focused := focusedOption(i.ApplicationCommandData().Options)
 	if focused == nil {
@@ -23,6 +19,8 @@ func (b *Bot) routeAutocomplete(ctx context.Context, i *discordgo.InteractionCre
 	}
 	typed := strings.ToLower(focused.StringValue())
 	switch focused.Name {
+	case "game":
+		b.respondAutocomplete(i, b.gameChoices(ctx, i.GuildID, typed))
 	case "pool":
 		b.respondAutocomplete(i, b.poolChoices(ctx, i.GuildID, typed))
 	case "square":
@@ -32,6 +30,29 @@ func (b *Bot) routeAutocomplete(ctx context.Context, i *discordgo.InteractionCre
 	default:
 		b.respondAutocomplete(i, nil)
 	}
+}
+
+// gameChoices lists the guild's open games filtered by the typed text; each
+// choice's value is the game id.
+func (b *Bot) gameChoices(ctx context.Context, guildID, typed string) []*discordgo.ApplicationCommandOptionChoice {
+	games, err := b.svc.Store().ListOpenGames(ctx, guildID)
+	if err != nil {
+		return nil
+	}
+	var choices []*discordgo.ApplicationCommandOptionChoice
+	for _, g := range games {
+		if typed != "" && !strings.Contains(strings.ToLower(g.Name), typed) {
+			continue
+		}
+		choices = append(choices, &discordgo.ApplicationCommandOptionChoice{
+			Name:  truncate(g.Name, 100),
+			Value: strconv.FormatInt(g.ID, 10),
+		})
+		if len(choices) >= 25 {
+			break
+		}
+	}
+	return choices
 }
 
 // entryChoices lists the squares in a pool, filtered by the typed text; each
@@ -80,26 +101,21 @@ func focusedOption(opts []*discordgo.ApplicationCommandInteractionDataOption) *d
 	return nil
 }
 
-// poolChoices lists the guild's pools filtered by the typed text: the nine static
-// wings/encounters first, then the guild's shared pools, each labeled by type.
+// poolChoices lists the guild's pools filtered by the typed text; each choice's
+// value is the pool slug.
 func (b *Bot) poolChoices(ctx context.Context, guildID, typed string) []*discordgo.ApplicationCommandOptionChoice {
+	pools, err := b.svc.Store().ListPools(ctx, guildID)
+	if err != nil {
+		return nil
+	}
 	var choices []*discordgo.ApplicationCommandOptionChoice
-	add := func(value, label string) {
+	for _, p := range pools {
+		if typed != "" && !strings.Contains(strings.ToLower(p.Slug), typed) && !strings.Contains(strings.ToLower(p.Name), typed) {
+			continue
+		}
+		choices = append(choices, &discordgo.ApplicationCommandOptionChoice{Name: truncate(p.Name, 100), Value: p.Slug})
 		if len(choices) >= 25 {
-			return
-		}
-		if typed == "" || strings.Contains(strings.ToLower(value), typed) || strings.Contains(strings.ToLower(label), typed) {
-			choices = append(choices, &discordgo.ApplicationCommandOptionChoice{Name: truncate(label, 100), Value: value})
-		}
-	}
-
-	for _, inst := range bingo.Instances() {
-		add(string(inst), "Static · "+inst.Label())
-	}
-	pools, err := b.svc.Store().ListPools(ctx, guildID, store.KindShared)
-	if err == nil {
-		for _, p := range pools {
-			add(p.Slug, "Shared · "+p.Name)
+			break
 		}
 	}
 	return choices

@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/Syndic0r/gw2-raid-bingo/internal/bingo"
 )
 
 const seedJSON = `{
@@ -51,21 +49,13 @@ func TestApplySeed(t *testing.T) {
 		t.Error("guild not marked as seed guild")
 	}
 
-	// A shared pool named from the slug exists.
-	pool, err := s.GetPool(ctx, guild, KindShared, "general")
+	// A pool named from the slug exists.
+	pool, err := s.GetPool(ctx, guild, "general")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if pool.Name != "General" {
-		t.Errorf("shared pool name = %q, want General", pool.Name)
-	}
-}
-
-func TestApplySeed_RejectsUnknownInstance(t *testing.T) {
-	s := newStore(t)
-	d := SeedData{Instance: map[string][]string{"w99": {"bad"}}}
-	if _, err := s.ApplySeed(context.Background(), guild, d); err == nil {
-		t.Fatal("expected error for unknown instance key")
+		t.Errorf("pool name = %q, want General", pool.Name)
 	}
 }
 
@@ -87,7 +77,11 @@ func TestRealSeedFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	// htcm has 25 entries in the notebook; a full card must be dealable from it.
-	game, err := s.NewGame(ctx, guild, bingo.HTCM, "host", nil, false)
+	htcm, err := s.GetPool(ctx, guild, "htcm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	game, err := s.NewGame(ctx, guild, "", "host", []int64{htcm.ID}, false)
 	if err != nil {
 		t.Fatal(err)
 	}

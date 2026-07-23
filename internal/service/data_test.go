@@ -29,8 +29,8 @@ func TestDataMutationsRequireAdmin(t *testing.T) {
 		name string
 		call func(userID string) error
 	}{
-		{"CreateSharedPool", func(u string) error {
-			_, err := svc.CreateSharedPool(ctx, guild, u, "pool-"+u, "Pool")
+		{"CreatePool", func(u string) error {
+			_, err := svc.CreatePool(ctx, guild, u, "pool-"+u, "Pool")
 			return err
 		}},
 		{"AddEntry", func(u string) error {
@@ -44,8 +44,8 @@ func TestDataMutationsRequireAdmin(t *testing.T) {
 			_, err := svc.ClearPool(ctx, guild, u, sharedID)
 			return err
 		}},
-		{"DeleteSharedPool", func(u string) error {
-			return svc.DeleteSharedPool(ctx, guild, u, sharedID)
+		{"DeletePool", func(u string) error {
+			return svc.DeletePool(ctx, guild, u, sharedID)
 		}},
 	}
 

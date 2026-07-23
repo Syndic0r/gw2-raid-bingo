@@ -1,8 +1,8 @@
 # GW2 Raid Bingo
 
-A free Discord bot and website for **Guild Wars 2 raid bingo**. Open a game for a raid wing and
-every player gets their own live 5x5 card; mark your squares as the run unfolds - in Discord or in
-the browser, kept in sync - and the first to call **BINGO** wins the round.
+A free Discord bot and website for **Guild Wars 2 raid bingo**. Open a game from any set of square
+pools you choose, and every player gets their own live 5x5 card; mark your squares as the run
+unfolds - in Discord or in the browser, kept in sync - and the first to call **BINGO** wins the round.
 
 - **Add the bot to your server:** https://gw2-raid-bingo.duckdns.org
 - **Play:** https://gw2-raid-bingo.duckdns.org
@@ -21,8 +21,8 @@ instance's data, and the marketing site, none of which are needed to understand 
   centre. Standard bingo: first to complete a row, column, or diagonal calls it.
 - **Discord and web in sync** over one live game - toggle a square in either place and it updates in
   the other.
-- Games per **raid wing (W1-W8) or Harvest Temple CM**, opened on demand or **scheduled** to start at
-  raid time.
+- Games built from **any combination of square pools** you pick (new servers start with blank
+  Wing 1-8 pools), opened on demand or **scheduled** to start at raid time.
 - **Win celebration** (with confetti on the website), a leaderboard, and game history.
 - Each server writes its **own squares** with `/bingo-data` (import/export supported).
 

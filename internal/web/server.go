@@ -97,6 +97,7 @@ func (s *Server) routes() {
 	// API.
 	s.mux.HandleFunc("GET /api/me", s.handleMe)
 	s.mux.HandleFunc("GET /api/guilds", s.handleGuilds)
+	s.mux.HandleFunc("GET /api/guild/{gid}/games", s.handleGames)
 	s.mux.HandleFunc("GET /api/guild/{gid}/board", s.handleBoard)
 	s.mux.HandleFunc("GET /api/guild/{gid}/history", s.handleHistory)
 	s.mux.HandleFunc("POST /api/guild/{gid}/card", s.handleDeal)

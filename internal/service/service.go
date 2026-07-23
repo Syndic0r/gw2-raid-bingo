@@ -10,7 +10,6 @@ import (
 	"math/rand"
 
 	"github.com/Syndic0r/gw2-raid-bingo/internal/authz"
-	"github.com/Syndic0r/gw2-raid-bingo/internal/bingo"
 	"github.com/Syndic0r/gw2-raid-bingo/internal/events"
 	"github.com/Syndic0r/gw2-raid-bingo/internal/store"
 )
@@ -104,42 +103,43 @@ func (s *Service) requireAnnounceChannel(ctx context.Context, guildID string) er
 	return nil
 }
 
-// NewGame opens a game for an instance (admin only) and publishes GameOpened.
-func (s *Service) NewGame(ctx context.Context, guildID, userID string, inst bingo.Instance, sharedPoolIDs []int64, replace bool) (store.Game, error) {
+// NewGame opens a game drawing from the given pools (admin only) and publishes
+// GameOpened. name is an optional label (empty -> derived from the pool names).
+func (s *Service) NewGame(ctx context.Context, guildID, userID, name string, poolIDs []int64, replace bool) (store.Game, error) {
 	if err := s.requireAdmin(ctx, guildID, userID); err != nil {
 		return store.Game{}, err
 	}
 	if err := s.requireAnnounceChannel(ctx, guildID); err != nil {
 		return store.Game{}, err
 	}
-	game, err := s.store.NewGame(ctx, guildID, inst, userID, sharedPoolIDs, replace)
+	game, err := s.store.NewGame(ctx, guildID, name, userID, poolIDs, replace)
 	if err != nil {
 		return store.Game{}, err
 	}
-	s.hub.Publish(events.Event{Kind: events.GameOpened, GuildID: guildID, Instance: string(inst), GameID: game.ID, UserID: userID})
+	s.hub.Publish(events.Event{Kind: events.GameOpened, GuildID: guildID, GameID: game.ID, UserID: userID})
 	return game, nil
 }
 
-// AbortGame aborts the open game for an instance (admin only).
-func (s *Service) AbortGame(ctx context.Context, guildID, userID string, inst bingo.Instance) (store.Game, error) {
+// AbortGame aborts a specific open game (admin only).
+func (s *Service) AbortGame(ctx context.Context, guildID, userID string, gameID int64) (store.Game, error) {
 	if err := s.requireAdmin(ctx, guildID, userID); err != nil {
 		return store.Game{}, err
 	}
-	game, err := s.store.GetOpenGame(ctx, guildID, inst)
+	game, err := s.store.GetGame(ctx, guildID, gameID)
 	if err != nil {
 		return store.Game{}, err
 	}
 	if err := s.store.AbortGame(ctx, guildID, game.ID); err != nil {
 		return store.Game{}, err
 	}
-	s.hub.Publish(events.Event{Kind: events.GameAborted, GuildID: guildID, Instance: string(inst), GameID: game.ID, UserID: userID})
+	s.hub.Publish(events.Event{Kind: events.GameAborted, GuildID: guildID, GameID: game.ID, UserID: userID})
 	return game, nil
 }
 
-// DealCard returns the user's card for the open game of an instance, dealing one
-// if needed. Any guild member may deal in.
-func (s *Service) DealCard(ctx context.Context, guildID, userID string, inst bingo.Instance) (store.Card, store.Game, error) {
-	game, err := s.store.GetOpenGame(ctx, guildID, inst)
+// DealCard returns the user's card for a specific game, dealing one if needed. Any
+// guild member may deal in; the game must still be open.
+func (s *Service) DealCard(ctx context.Context, guildID, userID string, gameID int64) (store.Card, store.Game, error) {
+	game, err := s.store.GetGame(ctx, guildID, gameID)
 	if err != nil {
 		return store.Card{}, store.Game{}, err
 	}
@@ -151,7 +151,7 @@ func (s *Service) DealCard(ctx context.Context, guildID, userID string, inst bin
 	if err != nil {
 		return store.Card{}, store.Game{}, err
 	}
-	s.hub.Publish(events.Event{Kind: events.CardDealt, GuildID: guildID, Instance: string(inst), GameID: game.ID, CardID: card.ID, UserID: userID})
+	s.hub.Publish(events.Event{Kind: events.CardDealt, GuildID: guildID, GameID: game.ID, CardID: card.ID, UserID: userID})
 	return card, game, nil
 }
 
@@ -178,11 +178,7 @@ func (s *Service) ToggleCell(ctx context.Context, guildID, actorUserID string, c
 	if err != nil {
 		return store.Card{}, false, err
 	}
-	game, err := s.store.GetGame(ctx, guildID, updated.GameID)
-	if err != nil {
-		return store.Card{}, false, err
-	}
-	s.hub.Publish(events.Event{Kind: events.CellToggled, GuildID: guildID, Instance: string(game.Instance), GameID: updated.GameID, CardID: cardID, UserID: actorUserID})
+	s.hub.Publish(events.Event{Kind: events.CellToggled, GuildID: guildID, GameID: updated.GameID, CardID: cardID, UserID: actorUserID})
 	return updated, hasBingo, nil
 }
 
@@ -192,6 +188,6 @@ func (s *Service) CallBingo(ctx context.Context, guildID, userID string, cardID 
 	if err != nil {
 		return store.CallBingoResult{}, err
 	}
-	s.hub.Publish(events.Event{Kind: events.GameFinished, GuildID: guildID, Instance: string(res.Game.Instance), GameID: res.Game.ID, CardID: cardID, UserID: userID})
+	s.hub.Publish(events.Event{Kind: events.GameFinished, GuildID: guildID, GameID: res.Game.ID, CardID: cardID, UserID: userID})
 	return res, nil
 }

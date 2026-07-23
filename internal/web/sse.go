@@ -5,14 +5,12 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Syndic0r/gw2-raid-bingo/internal/bingo"
 	"github.com/Syndic0r/gw2-raid-bingo/internal/events"
 )
 
-// handleEvents streams server-sent events for one instance's game. The client
-// reconnects automatically (EventSource) and refetches the board on each event,
-// so the payload stays tiny and a missed event self-heals on the next fetch or
-// reconnect.
+// handleEvents streams server-sent events for one game. The client reconnects
+// automatically (EventSource) and refetches the board on each event, so the
+// payload stays tiny and a missed event self-heals on the next fetch or reconnect.
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	gid := r.PathValue("gid")
 	userID, ok := s.requireMember(w, r, gid)
@@ -24,9 +22,8 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer s.releaseSSE(userID)
-	inst, err := bingo.ParseInstance(r.URL.Query().Get("instance"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid instance")
+	gameID, ok := parseGameID(w, r)
+	if !ok {
 		return
 	}
 	flusher, ok := w.(http.Flusher)
@@ -40,7 +37,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no") // disable proxy buffering for SSE
 
-	sub := s.hub.Subscribe(events.Topic(gid, string(inst)))
+	sub := s.hub.Subscribe(events.Topic(gid, gameID))
 	defer sub.Close()
 
 	// Initial comment so the client knows the stream is open.

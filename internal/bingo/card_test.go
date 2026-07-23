@@ -44,32 +44,9 @@ func checkWellFormed(t *testing.T, c *Card) {
 	}
 }
 
-func TestGenerateCard_FillsFromShared(t *testing.T) {
-	// Small instance pool (like w1) forces the fill to come from shared.
-	inst := entries("inst", 2)
-	shared := entries("shared", 40)
-	c, err := GenerateCard(inst, shared, newRand())
-	if err != nil {
-		t.Fatal(err)
-	}
-	checkWellFormed(t, c)
-
-	// Every instance entry must appear (themed squares are guaranteed).
-	got := map[int64]bool{}
-	for _, cell := range c.Cells {
-		got[cell.EntryID] = true
-	}
-	for _, e := range inst {
-		if !got[e.ID] {
-			t.Errorf("instance entry %d missing from card", e.ID)
-		}
-	}
-}
-
-func TestGenerateCard_SamplesLargeInstance(t *testing.T) {
-	// htcm has 25 entries but only 24 non-centre cells: one gets dropped.
-	inst := entries("htcm", 25)
-	c, err := GenerateCard(inst, nil, newRand())
+func TestGenerateCard_SamplesUnion(t *testing.T) {
+	// More than a full card's worth of entries: 24 are sampled, one dropped.
+	c, err := GenerateCard(entries("pool", 40), newRand())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +63,7 @@ func TestGenerateCard_SamplesLargeInstance(t *testing.T) {
 }
 
 func TestGenerateCard_ExactlyEnough(t *testing.T) {
-	c, err := GenerateCard(entries("inst", 10), entries("shared", 14), newRand())
+	c, err := GenerateCard(entries("pool", FillCount), newRand())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,21 +71,22 @@ func TestGenerateCard_ExactlyEnough(t *testing.T) {
 }
 
 func TestGenerateCard_NotEnough(t *testing.T) {
-	_, err := GenerateCard(entries("inst", 5), entries("shared", 10), newRand())
+	_, err := GenerateCard(entries("pool", FillCount-1), newRand())
 	if err != ErrNotEnoughEntries {
 		t.Fatalf("got %v, want ErrNotEnoughEntries", err)
 	}
 }
 
 func TestGenerateCard_DeduplicatesAcrossPools(t *testing.T) {
-	// An entry present in both slices must not be placed twice, and with the
-	// overlap removed there is no longer enough to fill a card.
-	shared := entries("shared", 23)
-	inst := append(entries("inst", 1), shared[0]) // shares one ID with shared
-	if got := UsableEntryCount(inst, shared); got != 24 {
+	// An entry present twice must be counted once; with the overlap removed there
+	// are exactly 24 distinct entries.
+	a := entries("pool", 23) // 23 distinct ids
+	extra := Entry{ID: 999999, Text: "one more"}
+	combined := append(append([]Entry{}, a...), extra, a[0]) // +1 unique, +1 duplicate
+	if got := UsableEntryCount(combined); got != 24 {
 		t.Fatalf("UsableEntryCount = %d, want 24 (overlap counted once)", got)
 	}
-	c, err := GenerateCard(inst, shared, newRand())
+	c, err := GenerateCard(combined, newRand())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,9 +94,9 @@ func TestGenerateCard_DeduplicatesAcrossPools(t *testing.T) {
 }
 
 func TestGenerateCard_Deterministic(t *testing.T) {
-	inst, shared := entries("inst", 3), entries("shared", 30)
-	a, _ := GenerateCard(inst, shared, rand.New(rand.NewSource(7)))
-	b, _ := GenerateCard(inst, shared, rand.New(rand.NewSource(7)))
+	pool := entries("pool", 30)
+	a, _ := GenerateCard(pool, rand.New(rand.NewSource(7)))
+	b, _ := GenerateCard(pool, rand.New(rand.NewSource(7)))
 	for i := range a.Cells {
 		if a.Cells[i] != b.Cells[i] {
 			t.Fatalf("same seed produced different cards at %d", i)

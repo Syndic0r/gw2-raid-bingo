@@ -22,48 +22,189 @@ func newStore(t *testing.T) *Store {
 	return s
 }
 
-// seedGuild sets up a guild with a full set of entries so cards can be dealt.
-func seedGuild(t *testing.T, s *Store) (instPoolID, sharedPoolID int64) {
+// fillPool adds n distinct entries to a pool.
+func fillPool(t *testing.T, s *Store, poolID int64, n int, prefix string) {
+	t.Helper()
+	ctx := context.Background()
+	for i := 0; i < n; i++ {
+		if _, err := s.AddEntry(ctx, guild, poolID, prefix+" "+string(rune('a'+i%26))+string(rune('a'+i/26))); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// seedGuild sets up a guild with two pools that each hold enough entries to fill a
+// card, so games can be opened. Returns the two pool ids.
+func seedGuild(t *testing.T, s *Store) (poolA, poolB int64) {
 	t.Helper()
 	ctx := context.Background()
 	if err := s.EnsureGuild(ctx, guild); err != nil {
 		t.Fatal(err)
 	}
-	inst, err := s.InstancePool(ctx, guild, bingo.W1)
+	// EnsureGuild created blank wing pools; reuse w1 as poolA and fill it.
+	a, err := s.GetPool(ctx, guild, "w1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.AddEntry(ctx, guild, inst.ID, "vale guardian teleports people"); err != nil {
-		t.Fatal(err)
-	}
-	shared, err := s.CreateSharedPool(ctx, guild, "general", "General")
+	fillPool(t, s, a.ID, bingo.FillCount, "wing")
+	b, err := s.CreatePool(ctx, guild, "general", "General")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 30; i++ {
-		if _, err := s.AddEntry(ctx, guild, shared.ID, "general line "+string(rune('a'+i))); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return inst.ID, shared.ID
+	fillPool(t, s, b.ID, 30, "general")
+	return a.ID, b.ID
 }
 
-func TestEnsureGuild_CreatesInstancePools(t *testing.T) {
+func TestEnsureGuild_CreatesDefaultPools(t *testing.T) {
 	s := newStore(t)
 	ctx := context.Background()
 	if err := s.EnsureGuild(ctx, guild); err != nil {
 		t.Fatal(err)
 	}
-	// Idempotent.
-	if err := s.EnsureGuild(ctx, guild); err != nil {
+	if err := s.EnsureGuild(ctx, guild); err != nil { // idempotent
 		t.Fatal(err)
 	}
-	pools, err := s.ListPools(ctx, guild, KindInstance)
+	pools, err := s.ListPools(ctx, guild)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(pools) != len(bingo.Instances()) {
-		t.Fatalf("got %d instance pools, want %d", len(pools), len(bingo.Instances()))
+	if len(pools) != len(DefaultPools()) {
+		t.Fatalf("got %d default pools, want %d", len(pools), len(DefaultPools()))
+	}
+	// A deleted default pool is NOT recreated on the next EnsureGuild.
+	if err := s.DeletePool(ctx, guild, pools[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EnsureGuild(ctx, guild); err != nil {
+		t.Fatal(err)
+	}
+	pools, _ = s.ListPools(ctx, guild)
+	if len(pools) != len(DefaultPools())-1 {
+		t.Fatalf("deleted default pool was recreated: got %d pools", len(pools))
+	}
+}
+
+func TestPoolSetKeyCanonical(t *testing.T) {
+	// Order-independent and dedup-stable: same set -> same key.
+	if poolSetKey([]int64{3, 1, 2}) != poolSetKey([]int64{2, 3, 1, 1}) {
+		t.Fatal("same set in different order/dupes should produce the same key")
+	}
+	if poolSetKey([]int64{1, 2}) == poolSetKey([]int64{1, 2, 3}) {
+		t.Fatal("different sets must produce different keys")
+	}
+	if poolSetKey([]int64{5, 2, 9}) != "2,5,9" {
+		t.Fatalf("unexpected key %q", poolSetKey([]int64{5, 2, 9}))
+	}
+}
+
+func TestNewGame_Validations(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+	poolA, _ := seedGuild(t, s)
+
+	// Empty selection is rejected.
+	if _, err := s.NewGame(ctx, guild, "", "u", nil, false); !errors.Is(err, ErrNoPoolsSelected) {
+		t.Fatalf("empty set: got %v, want ErrNoPoolsSelected", err)
+	}
+	// A pool with too few entries is rejected at creation (not deferred to deal).
+	thin, _ := s.CreatePool(ctx, guild, "thin", "Thin")
+	fillPool(t, s, thin.ID, 5, "thin")
+	if _, err := s.NewGame(ctx, guild, "", "u", []int64{thin.ID}, false); !errors.Is(err, ErrValidation) {
+		t.Fatalf("too-few entries: got %v, want ErrValidation", err)
+	}
+	// A pool id from another guild is rejected.
+	if _, err := s.NewGame(ctx, guild, "", "u", []int64{999999}, false); !errors.Is(err, ErrValidation) {
+		t.Fatalf("cross-guild pool: got %v, want ErrValidation", err)
+	}
+	// A valid single pool opens, and its name is derived from the pool names.
+	g, err := s.NewGame(ctx, guild, "", "u", []int64{poolA}, false)
+	if err != nil {
+		t.Fatalf("valid game: %v", err)
+	}
+	if g.Name != "Wing 1" {
+		t.Fatalf("derived name = %q, want %q", g.Name, "Wing 1")
+	}
+	// A custom name overrides the derived one.
+	g2, err := s.NewGame(ctx, guild, "Friday raid", "u", []int64{poolA, thin.ID}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g2.Name != "Friday raid" {
+		t.Fatalf("custom name = %q", g2.Name)
+	}
+}
+
+func TestNewGame_OneOpenPerPoolSet(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+	poolA, poolB := seedGuild(t, s)
+
+	if _, err := s.NewGame(ctx, guild, "", "u", []int64{poolA}, false); err != nil {
+		t.Fatal(err)
+	}
+	// Same set (order/dupes differ) while open -> rejected.
+	if _, err := s.NewGame(ctx, guild, "", "u", []int64{poolA, poolA}, false); !errors.Is(err, ErrGameOpen) {
+		t.Fatalf("same set: got %v, want ErrGameOpen", err)
+	}
+	// A different set opens independently.
+	if _, err := s.NewGame(ctx, guild, "", "u", []int64{poolA, poolB}, false); err != nil {
+		t.Fatalf("different set should open: %v", err)
+	}
+	// Replace aborts the open game with the same set and opens a fresh one.
+	g, err := s.NewGame(ctx, guild, "", "u", []int64{poolA}, true)
+	if err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+	if g.Status != StatusOpen {
+		t.Fatalf("replacement status %q", g.Status)
+	}
+	open, err := s.ListOpenGames(ctx, guild)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(open) != 2 { // {poolA} (replaced) + {poolA,poolB}
+		t.Fatalf("open games = %d, want 2", len(open))
+	}
+}
+
+func TestDeletePool_CascadesAndAllowed(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+	poolA, _ := seedGuild(t, s)
+	// A former wing pool is an ordinary, deletable pool now.
+	if err := s.DeletePool(ctx, guild, poolA); err != nil {
+		t.Fatalf("delete pool: %v", err)
+	}
+	if _, err := s.GetPool(ctx, guild, "w1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("pool still present: %v", err)
+	}
+	// Its entries cascaded away.
+	entries, _ := s.ListEntries(ctx, guild, poolA, false)
+	if len(entries) != 0 {
+		t.Fatalf("entries survived pool delete: %d", len(entries))
+	}
+	// Deleting a nonexistent pool is ErrNotFound.
+	if err := s.DeletePool(ctx, guild, poolA); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("re-delete: got %v, want ErrNotFound", err)
+	}
+}
+
+func TestDealDegradesWhenPoolDeleted(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+	poolA, poolB := seedGuild(t, s)
+	// Open a game over both pools, then delete one so the union drops below a card.
+	game, err := s.NewGame(ctx, guild, "", "u", []int64{poolA}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = poolB
+	if err := s.DeletePool(ctx, guild, poolA); err != nil {
+		t.Fatal(err)
+	}
+	// A subsequent deal degrades gracefully instead of panicking.
+	if _, err := s.GetOrDealCard(ctx, guild, game.ID, "u1", rand.New(rand.NewSource(1))); !errors.Is(err, bingo.ErrNotEnoughEntries) {
+		t.Fatalf("deal after pool delete: got %v, want ErrNotEnoughEntries", err)
 	}
 }
 
@@ -83,7 +224,6 @@ func TestAdminRolesRoundTrip(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("got %v, want 2 deduped roles", got)
 	}
-	// Replace semantics.
 	if err := s.SetAdminRoles(ctx, guild, []string{"r3"}); err != nil {
 		t.Fatal(err)
 	}
@@ -96,61 +236,16 @@ func TestAdminRolesRoundTrip(t *testing.T) {
 func TestEntryValidation(t *testing.T) {
 	s := newStore(t)
 	ctx := context.Background()
-	instPoolID, _ := seedGuild(t, s)
-	if _, err := s.AddEntry(ctx, guild, instPoolID, "   "); !errors.Is(err, ErrValidation) {
+	poolA, _ := seedGuild(t, s)
+	if _, err := s.AddEntry(ctx, guild, poolA, "   "); !errors.Is(err, ErrValidation) {
 		t.Errorf("empty text: got %v, want ErrValidation", err)
 	}
 	long := make([]byte, MaxEntryTextLen+1)
 	for i := range long {
 		long[i] = 'x'
 	}
-	if _, err := s.AddEntry(ctx, guild, instPoolID, string(long)); !errors.Is(err, ErrValidation) {
+	if _, err := s.AddEntry(ctx, guild, poolA, string(long)); !errors.Is(err, ErrValidation) {
 		t.Errorf("too-long text: got %v, want ErrValidation", err)
-	}
-}
-
-func TestNotEnoughEntriesToDeal(t *testing.T) {
-	s := newStore(t)
-	ctx := context.Background()
-	if err := s.EnsureGuild(ctx, guild); err != nil {
-		t.Fatal(err)
-	}
-	inst, _ := s.InstancePool(ctx, guild, bingo.W1)
-	if _, err := s.AddEntry(ctx, guild, inst.ID, "only one"); err != nil {
-		t.Fatal(err)
-	}
-	game, err := s.NewGame(ctx, guild, bingo.W1, "u-host", nil, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = s.GetOrDealCard(ctx, guild, game.ID, "u1", nil)
-	if !errors.Is(err, bingo.ErrNotEnoughEntries) {
-		t.Fatalf("got %v, want ErrNotEnoughEntries", err)
-	}
-}
-
-func TestNewGame_OneOpenPerInstance(t *testing.T) {
-	s := newStore(t)
-	ctx := context.Background()
-	seedGuild(t, s)
-	if _, err := s.NewGame(ctx, guild, bingo.W1, "u-host", nil, false); err != nil {
-		t.Fatal(err)
-	}
-	// Second open without replace is rejected.
-	if _, err := s.NewGame(ctx, guild, bingo.W1, "u-host", nil, false); !errors.Is(err, ErrGameOpen) {
-		t.Fatalf("got %v, want ErrGameOpen", err)
-	}
-	// A different instance is independent.
-	if _, err := s.NewGame(ctx, guild, bingo.W2, "u-host", nil, false); err != nil {
-		t.Fatalf("second instance should open: %v", err)
-	}
-	// Replace aborts the old game and opens a new one.
-	g2, err := s.NewGame(ctx, guild, bingo.W1, "u-host", nil, true)
-	if err != nil {
-		t.Fatalf("replace should succeed: %v", err)
-	}
-	if g2.Status != StatusOpen {
-		t.Fatalf("replacement game status %q", g2.Status)
 	}
 }
 
@@ -159,12 +254,11 @@ func TestFullGame_DealMarkCallBingo(t *testing.T) {
 	ctx := context.Background()
 	_, sharedID := seedGuild(t, s)
 
-	game, err := s.NewGame(ctx, guild, bingo.W1, "u-host", []int64{sharedID}, false)
+	game, err := s.NewGame(ctx, guild, "", "u-host", []int64{sharedID}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Two players deal in; dealing is idempotent per user.
 	c1, err := s.GetOrDealCard(ctx, guild, game.ID, "u1", rand.New(rand.NewSource(1)))
 	if err != nil {
 		t.Fatal(err)
@@ -180,41 +274,34 @@ func TestFullGame_DealMarkCallBingo(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Calling bingo without a line is refused.
 	if _, err := s.CallBingo(ctx, guild, c1.ID, "u1"); !errors.Is(err, ErrNoBingo) {
 		t.Fatalf("premature call: got %v, want ErrNoBingo", err)
 	}
 
-	// Mark the top row (cells 0..4) on u1's card to complete a line.
 	for _, idx := range []int{0, 1, 2, 3, 4} {
-		_, _, err := s.ToggleCell(ctx, guild, c1.ID, idx, true)
-		if err != nil {
+		if _, _, err := s.ToggleCell(ctx, guild, c1.ID, idx, true); err != nil {
 			t.Fatalf("toggle %d: %v", idx, err)
 		}
 	}
-	card, hasBingo, err := s.ToggleCell(ctx, guild, c1.ID, 0, true) // toggle 0 off...
+	_, hasBingo, err := s.ToggleCell(ctx, guild, c1.ID, 0, true) // off
 	if err != nil {
 		t.Fatal(err)
 	}
 	if hasBingo {
 		t.Fatal("row should be incomplete after un-marking a cell")
 	}
-	// ...and back on.
-	card, hasBingo, err = s.ToggleCell(ctx, guild, c1.ID, 0, true)
+	_, hasBingo, err = s.ToggleCell(ctx, guild, c1.ID, 0, true) // back on
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !hasBingo {
 		t.Fatal("row should be complete")
 	}
-	_ = card
 
-	// A non-owner/non-admin cannot toggle.
 	if _, _, err := s.ToggleCell(ctx, guild, c1.ID, 6, false); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("got %v, want ErrForbidden", err)
 	}
 
-	// Call bingo.
 	res, err := s.CallBingo(ctx, guild, c1.ID, "u1")
 	if err != nil {
 		t.Fatalf("call bingo: %v", err)
@@ -223,7 +310,6 @@ func TestFullGame_DealMarkCallBingo(t *testing.T) {
 		t.Fatalf("unexpected finished game: %+v", res.Game)
 	}
 
-	// Game is now closed: no more toggles, and a second call loses the race.
 	if _, _, err := s.ToggleCell(ctx, guild, c1.ID, 7, true); !errors.Is(err, ErrGameNotOpen) {
 		t.Fatalf("toggle after finish: got %v, want ErrGameNotOpen", err)
 	}
@@ -231,7 +317,6 @@ func TestFullGame_DealMarkCallBingo(t *testing.T) {
 		t.Fatalf("second call: got %v, want ErrGameNotOpen", err)
 	}
 
-	// The finished game and its cards remain readable as history.
 	cards, err := s.ListCards(ctx, guild, game.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -245,7 +330,7 @@ func TestToggleFreeCentreRejected(t *testing.T) {
 	s := newStore(t)
 	ctx := context.Background()
 	_, sharedID := seedGuild(t, s)
-	game, _ := s.NewGame(ctx, guild, bingo.W1, "u-host", []int64{sharedID}, false)
+	game, _ := s.NewGame(ctx, guild, "", "u-host", []int64{sharedID}, false)
 	c, err := s.GetOrDealCard(ctx, guild, game.ID, "u1", rand.New(rand.NewSource(1)))
 	if err != nil {
 		t.Fatal(err)
@@ -258,27 +343,21 @@ func TestToggleFreeCentreRejected(t *testing.T) {
 func TestSoftDeleteEntryKeepsHistory(t *testing.T) {
 	s := newStore(t)
 	ctx := context.Background()
-	instPoolID, _ := seedGuild(t, s)
-	e, err := s.AddEntry(ctx, guild, instPoolID, "temporary square")
+	poolA, _ := seedGuild(t, s)
+	e, err := s.AddEntry(ctx, guild, poolA, "temporary square")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := s.SoftDeleteEntry(ctx, guild, e.ID); err != nil {
 		t.Fatal(err)
 	}
-	active, err := s.ListEntries(ctx, guild, instPoolID, true)
-	if err != nil {
-		t.Fatal(err)
-	}
+	active, _ := s.ListEntries(ctx, guild, poolA, true)
 	for _, a := range active {
 		if a.ID == e.ID {
 			t.Fatal("soft-deleted entry still active")
 		}
 	}
-	all, err := s.ListEntries(ctx, guild, instPoolID, false)
-	if err != nil {
-		t.Fatal(err)
-	}
+	all, _ := s.ListEntries(ctx, guild, poolA, false)
 	found := false
 	for _, a := range all {
 		if a.ID == e.ID {
@@ -293,23 +372,42 @@ func TestSoftDeleteEntryKeepsHistory(t *testing.T) {
 func TestClearPoolEntries(t *testing.T) {
 	s := newStore(t)
 	ctx := context.Background()
-	instPoolID, _ := seedGuild(t, s)
-	// seedGuild added 1 instance entry; add two more.
-	s.AddEntry(ctx, guild, instPoolID, "square two")
-	s.AddEntry(ctx, guild, instPoolID, "square three")
-	n, err := s.ClearPoolEntries(ctx, guild, instPoolID)
+	poolA, _ := seedGuild(t, s) // poolA has FillCount entries
+	n, err := s.ClearPoolEntries(ctx, guild, poolA)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 3 {
-		t.Fatalf("cleared %d, want 3", n)
+	if int(n) != bingo.FillCount {
+		t.Fatalf("cleared %d, want %d", n, bingo.FillCount)
 	}
-	active, _ := s.ListEntries(ctx, guild, instPoolID, true)
+	active, _ := s.ListEntries(ctx, guild, poolA, true)
 	if len(active) != 0 {
 		t.Fatalf("pool still has %d active entries after clear", len(active))
 	}
-	// A wrong-guild clear is ErrNotFound.
-	if _, err := s.ClearPoolEntries(ctx, "other-guild", instPoolID); !errors.Is(err, ErrNotFound) {
+	if _, err := s.ClearPoolEntries(ctx, "other-guild", poolA); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-guild clear: got %v, want ErrNotFound", err)
+	}
+}
+
+func TestUnicodeEntriesRoundTrip(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+	if err := s.EnsureGuild(ctx, guild); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := s.CreatePool(ctx, guild, "intl", "Intl")
+	texts := []string{"漢字ビンゴ", "بينغو", "Ёлки-палки", "emoji 🎉🎲", "combining é"}
+	for _, txt := range texts {
+		e, err := s.AddEntry(ctx, guild, p.ID, txt)
+		if err != nil {
+			t.Fatalf("add %q: %v", txt, err)
+		}
+		if e.Text != txt {
+			t.Fatalf("stored %q, want %q", e.Text, txt)
+		}
+	}
+	got, _ := s.ListEntries(ctx, guild, p.ID, true)
+	if len(got) != len(texts) {
+		t.Fatalf("got %d entries, want %d", len(got), len(texts))
 	}
 }

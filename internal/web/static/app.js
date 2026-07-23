@@ -6,15 +6,12 @@ var state = {
   me: null,
   guilds: [],
   guild: null,      // {id, name, admin}
-  instance: null,   // instance key
+  games: [],        // open games in the selected guild
+  pools: [],        // the guild's pools (admins only), for the new-game picker
+  gameId: null,     // selected game id
   board: null,      // board response
   es: null          // EventSource
 };
-
-var INSTANCES = [
-  ['w1', 'W1'], ['w2', 'W2'], ['w3', 'W3'], ['w4', 'W4'],
-  ['w5', 'W5'], ['w6', 'W6'], ['w7', 'W7'], ['w8', 'W8'], ['htcm', 'HTCM']
-];
 
 var app = document.getElementById('app');
 var accountEl = document.getElementById('account');
@@ -143,36 +140,63 @@ function renderGuildPicker() {
 
 function selectGuild(g) {
   state.guild = g;
-  state.instance = state.instance || 'w1';
+  state.gameId = null;
   renderAccount(); // show the selected server name + avatar in the header
-  renderGame();
+  loadGames();
 }
 
-// --- game view ---
-function renderGame() {
+// --- games list (the open games in a guild) ---
+async function loadGames() {
+  closeStream();
+  clear(app);
+  app.appendChild(el('p', { class: 'loading', text: 'Loading games...' }));
+  var data;
+  try {
+    data = await api('GET', 'api/guild/' + state.guild.id + '/games');
+  } catch (e) {
+    clear(app); app.appendChild(el('p', { class: 'error', text: e.message })); return;
+  }
+  state.games = data.games || [];
+  state.pools = data.pools || [];
+  renderGamesList(data.admin);
+}
+
+function renderGamesList(admin) {
   clear(app);
   closeStream();
-
   if (state.guilds.length > 1) {
-    var back = el('button', { class: 'btn secondary', text: '← Change server', onclick: renderGuildPicker });
-    app.appendChild(back);
+    app.appendChild(el('button', { class: 'btn secondary', text: '← Change server', onclick: renderGuildPicker }));
   }
   var head = el('div', { class: 'row' });
   head.appendChild(el('h2', { text: state.guild.name }));
   head.appendChild(el('span', { class: 'spacer' }));
-  if (state.guild.admin) {
+  if (admin) {
+    head.appendChild(el('button', { class: 'btn', text: 'New game', onclick: renderNewGame }));
     head.appendChild(el('button', { class: 'btn secondary', text: 'Manage data', onclick: renderManageData }));
   }
   app.appendChild(head);
 
-  var tabs = el('div', { class: 'tabs' });
-  INSTANCES.forEach(function (pair) {
-    var t = el('button', { class: 'tab' + (pair[0] === state.instance ? ' active' : ''), text: pair[1],
-      onclick: function () { state.instance = pair[0]; renderGame(); } });
-    tabs.appendChild(t);
+  if (!state.games.length) {
+    var empty = el('div', { class: 'panel' });
+    empty.appendChild(el('p', { class: 'muted', text: admin ? 'No games are open. Start one with "New game" (or /bingo new in Discord).' : 'No games are open. Ask a bingo admin to start one with /bingo new.' }));
+    app.appendChild(empty);
+    return;
+  }
+  var list = el('div', { class: 'panel' });
+  list.appendChild(el('strong', { text: 'Open games' }));
+  state.games.forEach(function (g) {
+    var item = el('button', { class: 'picker-item', onclick: function () { openGame(g.id); } });
+    item.appendChild(el('span', { text: g.name || ('Game #' + g.id) }));
+    item.appendChild(el('span', { class: 'spacer' }));
+    item.appendChild(el('span', { class: 'muted', text: (g.players || 0) + ' players' }));
+    list.appendChild(item);
   });
-  app.appendChild(tabs);
+  app.appendChild(list);
+}
 
+function openGame(gameId) {
+  state.gameId = gameId;
+  clear(app);
   var container = el('div', { attrs: { id: 'board-container' } });
   app.appendChild(container);
   loadBoard();
@@ -183,7 +207,7 @@ async function loadBoard() {
   var container = document.getElementById('board-container');
   if (!container) return;
   try {
-    state.board = await api('GET', 'api/guild/' + state.guild.id + '/board?instance=' + state.instance);
+    state.board = await api('GET', 'api/guild/' + state.guild.id + '/board?game=' + state.gameId);
   } catch (e) {
     clear(container); container.appendChild(el('p', { class: 'error', text: e.message })); return;
   }
@@ -196,21 +220,20 @@ function renderBoard() {
   clear(container);
   var b = state.board;
 
+  container.appendChild(el('button', { class: 'btn secondary', text: '← All games', onclick: loadGames }));
+
   if (!b.game) {
     var panel = el('div', { class: 'panel' });
-    panel.appendChild(el('p', { class: 'muted', text: 'No game is open for this instance.' }));
-    if (b.admin) panel.appendChild(el('button', { class: 'btn', text: 'Open a game', onclick: newGame }));
-    else panel.appendChild(el('p', { class: 'muted', text: 'Ask a bingo admin to open one with /bingo new.' }));
+    panel.appendChild(el('p', { class: 'muted', text: 'This game is no longer available.' }));
     container.appendChild(panel);
     return;
   }
 
   var info = el('div', { class: 'panel' });
   var infoRow = el('div', { class: 'row' });
-  infoRow.appendChild(el('span', { text: 'Game #' + b.game.id + ' · ' + (b.players || 0) + ' players' }));
+  infoRow.appendChild(el('span', { text: (b.game.name || ('Game #' + b.game.id)) + ' · ' + (b.players || 0) + ' players' }));
   infoRow.appendChild(el('span', { class: 'spacer' }));
   if (b.admin) {
-    infoRow.appendChild(el('button', { class: 'btn secondary', text: 'New game', onclick: newGame }));
     infoRow.appendChild(el('button', { class: 'btn danger', text: 'Abort', onclick: abortGame }));
   }
   info.appendChild(infoRow);
@@ -276,9 +299,59 @@ function renderCard(container, card, hasBingo) {
   }
 }
 
+// --- new game: pick the pools to play with ---
+function renderNewGame() {
+  closeStream();
+  clear(app);
+  app.appendChild(el('button', { class: 'btn secondary', text: '← All games', onclick: loadGames }));
+  var panel = el('div', { class: 'panel' });
+  panel.appendChild(el('h2', { text: 'New game' }));
+  if (!state.pools.length) {
+    panel.appendChild(el('p', { class: 'muted', text: 'This server has no pools yet. Add squares under "Manage data" first.' }));
+    app.appendChild(panel);
+    return;
+  }
+  panel.appendChild(el('p', { class: 'muted', text: 'Pick the pools to draw squares from. A card needs 24 unique squares, so the pools you choose must have at least that many between them.' }));
+
+  var nameInput = el('input', { class: 'text-input', attrs: { type: 'text', placeholder: 'Optional name (defaults to the pool names)', maxlength: '80' } });
+  panel.appendChild(nameInput);
+
+  var chosen = {};
+  var pickList = el('div', { class: 'pick-list' });
+  state.pools.forEach(function (p) {
+    var label = el('label', { class: 'pick-row' });
+    var cb = el('input', { attrs: { type: 'checkbox' } });
+    cb.addEventListener('change', function () { if (cb.checked) chosen[p.id] = true; else delete chosen[p.id]; });
+    label.appendChild(cb);
+    label.appendChild(el('span', { text: p.name }));
+    label.appendChild(el('span', { class: 'spacer' }));
+    label.appendChild(el('span', { class: 'muted', text: p.count + ' squares' }));
+    pickList.appendChild(label);
+  });
+  panel.appendChild(pickList);
+
+  var row = el('div', { class: 'row add-row' });
+  row.appendChild(el('button', {
+    class: 'btn', text: 'Start game', onclick: function () {
+      var ids = Object.keys(chosen).map(function (k) { return parseInt(k, 10); });
+      startGame(ids, nameInput.value.trim());
+    }
+  }));
+  panel.appendChild(row);
+  app.appendChild(panel);
+}
+
+async function startGame(poolIds, name) {
+  if (!poolIds.length) { alert('Select at least one pool.'); return; }
+  try {
+    var res = await api('POST', 'api/guild/' + state.guild.id + '/game/new', { poolIds: poolIds, name: name, replace: false });
+    openGame(res.game.id);
+  } catch (e) { alert(e.message); }
+}
+
 // --- actions ---
 async function dealCard() {
-  try { await api('POST', 'api/guild/' + state.guild.id + '/card', { instance: state.instance }); await loadBoard(); }
+  try { await api('POST', 'api/guild/' + state.guild.id + '/card', { gameId: state.gameId }); await loadBoard(); }
   catch (e) { alert(e.message); }
 }
 // Client-side bingo check, mirroring the server (rows, columns, both diagonals;
@@ -327,21 +400,16 @@ async function callBingo(cardId) {
     await loadBoard();
   } catch (e) { alert(e.message); }
 }
-async function newGame() {
-  var replace = state.board && state.board.game ? confirm('A game is open. Replace it? Its cards become read-only.') : false;
-  try { await api('POST', 'api/guild/' + state.guild.id + '/game/new', { instance: state.instance, replace: replace }); await loadBoard(); }
-  catch (e) { alert(e.message); }
-}
 async function abortGame() {
-  if (!confirm('Abort the open game? Its cards become read-only.')) return;
-  try { await api('POST', 'api/guild/' + state.guild.id + '/game/abort', { instance: state.instance }); await loadBoard(); }
+  if (!confirm('Abort this game? Its cards become read-only.')) return;
+  try { await api('POST', 'api/guild/' + state.guild.id + '/game/abort', { gameId: state.gameId }); loadGames(); }
   catch (e) { alert(e.message); }
 }
 
 // --- live updates ---
 function openStream() {
   closeStream();
-  state.es = new EventSource('api/guild/' + state.guild.id + '/events?instance=' + state.instance);
+  state.es = new EventSource('api/guild/' + state.guild.id + '/events?game=' + state.gameId);
   state.es.onmessage = handleStreamEvent;
   ['game_opened', 'game_finished', 'game_aborted', 'card_dealt', 'cell_toggled'].forEach(function (k) {
     state.es.addEventListener(k, handleStreamEvent);
@@ -370,7 +438,7 @@ async function renderManageData() {
   closeStream();
   clear(app);
   var head = el('div', { class: 'row' });
-  head.appendChild(el('button', { class: 'btn secondary', text: '← Back to game', onclick: renderGame }));
+  head.appendChild(el('button', { class: 'btn secondary', text: '← Back to games', onclick: loadGames }));
   head.appendChild(el('h2', { text: 'Manage bingo data' }));
   app.appendChild(head);
   var container = el('div', { attrs: { id: 'data-container' } });
@@ -391,31 +459,23 @@ async function loadData() {
   }
   clear(container);
 
-  // Quick-jump bar - shared pools are usually the ones you're editing.
   var jump = el('div', { class: 'row jump-bar' });
-  jump.appendChild(el('button', { class: 'btn secondary', text: '↓ Shared pools', onclick: function () { scrollToId('shared-pools'); } }));
-  jump.appendChild(el('button', { class: 'btn', text: '+ New shared pool', onclick: function () { scrollToId('new-pool-form'); focusFirstInput('new-pool-form'); } }));
+  jump.appendChild(el('button', { class: 'btn', text: '+ New pool', onclick: function () { scrollToId('new-pool-form'); focusFirstInput('new-pool-form'); } }));
   container.appendChild(jump);
 
-  container.appendChild(el('h3', { class: 'data-group', text: 'Static pools — wings & encounters' }));
-  container.appendChild(el('p', { class: 'muted', text: "One fixed pool per instance. Its squares appear on that instance's cards." }));
-  (data.static || []).forEach(function (p) { container.appendChild(poolCard(p, false)); });
-
-  container.appendChild(el('h3', { class: 'data-group', text: 'Shared pools', attrs: { id: 'shared-pools' } }));
-  container.appendChild(el('p', { class: 'muted', text: "Mixed into every game's cards. Create as many as you like." }));
+  container.appendChild(el('h3', { class: 'data-group', text: 'Pools' }));
+  container.appendChild(el('p', { class: 'muted', text: 'Squares live in pools. Pick which pools to play when you start a game. New servers start with blank Wing 1-8 pools; add, rename, or delete any of them.' }));
   container.appendChild(newPoolForm());
-  (data.shared || []).forEach(function (p) { container.appendChild(poolCard(p, true)); });
+  (data.pools || []).forEach(function (p) { container.appendChild(poolCard(p)); });
 }
 
-function poolCard(p, isShared) {
+function poolCard(p) {
   var card = el('div', { class: 'panel pool-card' });
   var header = el('div', { class: 'row' });
   header.appendChild(el('strong', { text: p.name }));
   header.appendChild(el('span', { class: 'muted', text: p.entries.length + ' squares' }));
   header.appendChild(el('span', { class: 'spacer' }));
-  if (isShared) {
-    header.appendChild(el('button', { class: 'btn danger', text: 'Delete pool', onclick: function () { deletePool(p); } }));
-  }
+  header.appendChild(el('button', { class: 'btn danger', text: 'Delete pool', onclick: function () { deletePool(p); } }));
   card.appendChild(header);
 
   var list = el('div', { class: 'entry-list' });
@@ -476,7 +536,7 @@ async function removeEntry(e, row) {
 }
 
 async function deletePool(p) {
-  if (!confirm('Delete the shared pool "' + p.name + '" and all its squares?')) return;
+  if (!confirm('Delete the pool "' + p.name + '" and all its squares?')) return;
   try { await api('POST', 'api/guild/' + state.guild.id + '/data/pool-delete', { poolId: p.id }); loadData(); }
   catch (e) { alert(e.message); }
 }
@@ -486,7 +546,7 @@ function focusFirstInput(id) { var e = document.getElementById(id); var inp = e 
 
 function newPoolForm() {
   var form = el('div', { class: 'panel', attrs: { id: 'new-pool-form' } });
-  form.appendChild(el('strong', { text: 'New shared pool' }));
+  form.appendChild(el('strong', { text: 'New pool' }));
   var row = el('div', { class: 'row add-row' });
   var name = el('input', { class: 'text-input', attrs: { type: 'text', placeholder: 'Pool name (e.g. People, Music)…', maxlength: '60' } });
   async function create() {

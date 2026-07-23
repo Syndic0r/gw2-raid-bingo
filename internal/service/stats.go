@@ -24,9 +24,9 @@ type GameStats struct {
 	Leaders     []PlayerProgress // sorted best-first
 }
 
-// GameStatsForInstance computes stats for the open game of an instance.
-func (s *Service) GameStatsForInstance(ctx context.Context, guildID string, inst bingo.Instance) (GameStats, error) {
-	game, err := s.store.GetOpenGame(ctx, guildID, inst)
+// GameStatsForGame computes stats for a specific game.
+func (s *Service) GameStatsForGame(ctx context.Context, guildID string, gameID int64) (GameStats, error) {
+	game, err := s.store.GetGame(ctx, guildID, gameID)
 	if err != nil {
 		return GameStats{}, err
 	}

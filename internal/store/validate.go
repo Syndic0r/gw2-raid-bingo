@@ -14,7 +14,8 @@ const (
 	MaxEntryTextLen   = 200
 	MaxPoolNameLen    = 60
 	MaxPoolSlugLen    = 40
-	MaxSharedPools    = 50
+	MaxGameNameLen    = 80
+	MaxPools          = 50
 	MaxEntriesPerPool = 500
 )
 
@@ -53,7 +54,24 @@ func cleanPoolName(name string) (string, error) {
 	return n, nil
 }
 
-// cleanSlug validates a shared pool slug: lowercase letters, digits, and hyphens.
+// cleanGameName validates an optional custom game name. Empty is allowed (the
+// caller derives a name from the selected pools); a provided name is trimmed,
+// checked for valid UTF-8, and rune-capped.
+func cleanGameName(name string) (string, error) {
+	n := strings.TrimSpace(name)
+	if n == "" {
+		return "", nil
+	}
+	if !utf8.ValidString(n) {
+		return "", validationErr("game name must be valid UTF-8")
+	}
+	if utf8.RuneCountInString(n) > MaxGameNameLen {
+		return "", validationErr("game name must be at most %d characters", MaxGameNameLen)
+	}
+	return n, nil
+}
+
+// cleanSlug validates a pool slug: lowercase letters, digits, and hyphens.
 func cleanSlug(slug string) (string, error) {
 	s := strings.ToLower(strings.TrimSpace(slug))
 	if s == "" {

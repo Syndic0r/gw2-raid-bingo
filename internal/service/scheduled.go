@@ -4,22 +4,22 @@ import (
 	"context"
 	"errors"
 
-	"github.com/Syndic0r/gw2-raid-bingo/internal/bingo"
 	"github.com/Syndic0r/gw2-raid-bingo/internal/events"
 	"github.com/Syndic0r/gw2-raid-bingo/internal/store"
 )
 
-// ScheduleGame records a future game for an instance (admin only). fireAtUnix is
-// the resolved unix time; validation of "future" and horizon happens before this
-// in the bot layer (via the when package).
-func (s *Service) ScheduleGame(ctx context.Context, guildID, userID string, inst bingo.Instance, fireAtUnix int64, replace bool) (store.ScheduledGame, error) {
+// ScheduleGame records a future game drawing from the given pools (admin only).
+// name is an optional label (empty -> derived at fire time). fireAtUnix is the
+// resolved unix time; validation of "future" and horizon happens before this in
+// the bot layer (via the when package).
+func (s *Service) ScheduleGame(ctx context.Context, guildID, userID, name string, poolIDs []int64, fireAtUnix int64, replace bool) (store.ScheduledGame, error) {
 	if err := s.requireAdmin(ctx, guildID, userID); err != nil {
 		return store.ScheduledGame{}, err
 	}
 	if err := s.requireAnnounceChannel(ctx, guildID); err != nil {
 		return store.ScheduledGame{}, err
 	}
-	return s.store.CreateScheduledGame(ctx, guildID, inst, fireAtUnix, replace, userID)
+	return s.store.CreateScheduledGame(ctx, guildID, name, poolIDs, fireAtUnix, replace, userID)
 }
 
 // ListScheduled returns a guild's pending schedules (admin only).
@@ -57,46 +57,26 @@ func (s *Service) RunDueSchedules(ctx context.Context, nowUnix int64) ([]FiredSc
 	}
 	out := make([]FiredSchedule, 0, len(due))
 	for _, sched := range due {
-		pools, err := s.AllSharedPoolIDs(ctx, sched.GuildID)
-		if err != nil {
-			// The schedule is already claimed; report it as skipped rather than
-			// silently opening a game with no shared pools.
-			_ = s.store.MarkScheduledSkipped(ctx, sched.ID)
-			out = append(out, FiredSchedule{Schedule: sched, Skipped: true})
-			continue
-		}
-		game, err := s.store.NewGame(ctx, sched.GuildID, sched.Instance, sched.CreatedBy, pools, sched.ReplaceOpen)
+		game, err := s.store.NewGame(ctx, sched.GuildID, sched.Name, sched.CreatedBy, sched.PoolIDs, sched.ReplaceOpen)
 		if err != nil {
 			if errors.Is(err, store.ErrGameOpen) {
-				// A game was already open and this schedule did not ask to replace.
+				// A game with this pool-set was already open and this schedule did
+				// not ask to replace it.
 				_ = s.store.MarkScheduledSkipped(ctx, sched.ID)
 				out = append(out, FiredSchedule{Schedule: sched, Skipped: true})
 				continue
 			}
-			// Transient error: leave it fired (do not retry-storm) but report.
+			// The pools may have been deleted or emptied since scheduling (no pools
+			// left, or too few squares to fill a card), or a transient error. Mark it
+			// skipped rather than retry-storming, and report it.
+			_ = s.store.MarkScheduledSkipped(ctx, sched.ID)
 			out = append(out, FiredSchedule{Schedule: sched, Skipped: true})
 			continue
 		}
 		s.hub.Publish(events.Event{
-			Kind: events.GameOpened, GuildID: sched.GuildID,
-			Instance: string(sched.Instance), GameID: game.ID, UserID: sched.CreatedBy,
+			Kind: events.GameOpened, GuildID: sched.GuildID, GameID: game.ID, UserID: sched.CreatedBy,
 		})
 		out = append(out, FiredSchedule{Schedule: sched, Game: game})
 	}
 	return out, nil
-}
-
-// AllSharedPoolIDs returns every shared pool id for a guild - the default pool
-// selection whenever a game is opened without an explicit choice (Discord
-// commands, the website, and the scheduler all use it).
-func (s *Service) AllSharedPoolIDs(ctx context.Context, guildID string) ([]int64, error) {
-	pools, err := s.store.ListPools(ctx, guildID, store.KindShared)
-	if err != nil {
-		return nil, err
-	}
-	ids := make([]int64, 0, len(pools))
-	for _, p := range pools {
-		ids = append(ids, p.ID)
-	}
-	return ids, nil
 }

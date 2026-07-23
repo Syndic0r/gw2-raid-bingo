@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"time"
-
-	"github.com/Syndic0r/gw2-raid-bingo/internal/bingo"
 )
 
 // ErrNotFound is returned when a requested row does not exist.
@@ -18,8 +16,10 @@ var ErrNotFound = errors.New("not found")
 func now() int64 { return time.Now().Unix() }
 
 // EnsureGuild inserts the guild's settings row if it is missing and creates the
-// nine fixed instance pools for it. It is idempotent and safe to call on every
-// interaction. Shared pools are never created here - guilds add their own.
+// default pools (the eight blank raid wings) for it. It is idempotent and safe to
+// call on every interaction: existing pools are left untouched, and the default
+// pools are ordinary, deletable pools, so a guild that has deleted or renamed them
+// is not "healed" back on the next call (the ON CONFLICT only skips by slug).
 func (s *Store) EnsureGuild(ctx context.Context, guildID string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -28,20 +28,46 @@ func (s *Store) EnsureGuild(ctx context.Context, guildID string) error {
 	defer tx.Rollback()
 
 	ts := now()
-	if _, err := tx.ExecContext(ctx,
+	res, err := tx.ExecContext(ctx,
 		`INSERT INTO guild_settings (guild_id, created_at, updated_at)
 		 VALUES (?, ?, ?)
 		 ON CONFLICT (guild_id) DO NOTHING`,
-		guildID, ts, ts); err != nil {
+		guildID, ts, ts)
+	if err != nil {
 		return fmt.Errorf("ensure guild: %w", err)
 	}
-	for _, inst := range bingo.Instances() {
-		if _, err := tx.ExecContext(ctx,
+	// Only seed default pools the first time we see a guild (the settings row was
+	// just inserted). This keeps EnsureGuild from recreating a wing pool the guild
+	// deliberately deleted later.
+	if n, _ := res.RowsAffected(); n == 0 {
+		return tx.Commit()
+	}
+	for _, dp := range DefaultPools() {
+		poolRes, err := tx.ExecContext(ctx,
 			`INSERT INTO pools (guild_id, kind, slug, name, created_at)
 			 VALUES (?, ?, ?, ?, ?)
 			 ON CONFLICT (guild_id, kind, slug) DO NOTHING`,
-			guildID, KindInstance, string(inst), inst.Label(), ts); err != nil {
-			return fmt.Errorf("ensure instance pool %s: %w", inst, err)
+			guildID, poolKind, dp.Slug, dp.Name, ts)
+		if err != nil {
+			return fmt.Errorf("ensure default pool %s: %w", dp.Slug, err)
+		}
+		// Seed optional starter entries only into a pool we just created.
+		if n, _ := poolRes.RowsAffected(); n > 0 && len(dp.Entries) > 0 {
+			poolID, err := poolRes.LastInsertId()
+			if err != nil {
+				return err
+			}
+			for _, text := range dp.Entries {
+				cleaned, err := cleanText(text)
+				if err != nil {
+					continue // skip malformed starter content rather than fail bootstrap
+				}
+				if _, err := tx.ExecContext(ctx,
+					`INSERT INTO entries (guild_id, pool_id, text, active, created_at, updated_at)
+					 VALUES (?, ?, ?, 1, ?, ?)`, guildID, poolID, cleaned, ts, ts); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	return tx.Commit()

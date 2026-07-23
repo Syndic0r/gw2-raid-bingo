@@ -3,8 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
-
-	"github.com/Syndic0r/gw2-raid-bingo/internal/bingo"
+	"encoding/json"
 )
 
 // Scheduled game statuses.
@@ -19,11 +18,13 @@ const (
 // stack up.
 const MaxPendingSchedulesPerGuild = 50
 
-// ScheduledGame is a future game creation.
+// ScheduledGame is a future game creation: it persists the pool-set (and optional
+// name) to open when the time comes, mirroring NewGame's inputs.
 type ScheduledGame struct {
 	ID          int64
 	GuildID     string
-	Instance    bingo.Instance
+	Name        string
+	PoolIDs     []int64
 	FireAt      int64
 	ReplaceOpen bool
 	CreatedBy   string
@@ -32,10 +33,20 @@ type ScheduledGame struct {
 	FiredAt     int64
 }
 
-// CreateScheduledGame records a future game, enforcing the per-guild cap.
-func (s *Store) CreateScheduledGame(ctx context.Context, guildID string, inst bingo.Instance, fireAt int64, replace bool, createdBy string) (ScheduledGame, error) {
-	if !inst.Valid() {
-		return ScheduledGame{}, validationErr("unknown instance")
+// CreateScheduledGame records a future game, enforcing the per-guild cap. The pool
+// ids are stored as-is and validated against the guild when the schedule fires
+// (pools may be edited between scheduling and firing).
+func (s *Store) CreateScheduledGame(ctx context.Context, guildID, name string, poolIDs []int64, fireAt int64, replace bool, createdBy string) (ScheduledGame, error) {
+	cleanName, err := cleanGameName(name)
+	if err != nil {
+		return ScheduledGame{}, err
+	}
+	if len(poolIDs) == 0 {
+		return ScheduledGame{}, ErrNoPoolsSelected
+	}
+	poolJSON, err := json.Marshal(poolIDs)
+	if err != nil {
+		return ScheduledGame{}, err
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -55,9 +66,9 @@ func (s *Store) CreateScheduledGame(ctx context.Context, guildID string, inst bi
 
 	ts := now()
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO scheduled_games (guild_id, instance, fire_at, replace_open, created_by, status, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		guildID, string(inst), fireAt, boolInt(replace), createdBy, SchedPending, ts)
+		`INSERT INTO scheduled_games (guild_id, name, pool_ids, fire_at, replace_open, created_by, status, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		guildID, cleanName, string(poolJSON), fireAt, boolInt(replace), createdBy, SchedPending, ts)
 	if err != nil {
 		return ScheduledGame{}, err
 	}
@@ -69,16 +80,18 @@ func (s *Store) CreateScheduledGame(ctx context.Context, guildID string, inst bi
 		return ScheduledGame{}, err
 	}
 	return ScheduledGame{
-		ID: id, GuildID: guildID, Instance: inst, FireAt: fireAt,
+		ID: id, GuildID: guildID, Name: cleanName, PoolIDs: poolIDs, FireAt: fireAt,
 		ReplaceOpen: replace, CreatedBy: createdBy, Status: SchedPending, CreatedAt: ts,
 	}, nil
 }
 
+const scheduledColumns = `id, guild_id, name, pool_ids, fire_at, replace_open, created_by, status, created_at, COALESCE(fired_at, 0)`
+
 // ListScheduledGames returns a guild's pending schedules, soonest first.
 func (s *Store) ListScheduledGames(ctx context.Context, guildID string) ([]ScheduledGame, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, guild_id, instance, fire_at, replace_open, created_by, status, created_at, COALESCE(fired_at, 0)
-		 FROM scheduled_games WHERE guild_id = ? AND status = ? ORDER BY fire_at`, guildID, SchedPending)
+		`SELECT `+scheduledColumns+` FROM scheduled_games WHERE guild_id = ? AND status = ? ORDER BY fire_at`,
+		guildID, SchedPending)
 	if err != nil {
 		return nil, err
 	}
@@ -111,8 +124,7 @@ func (s *Store) ClaimDueScheduled(ctx context.Context, nowUnix int64, limit int)
 	defer tx.Rollback()
 
 	rows, err := tx.QueryContext(ctx,
-		`SELECT id, guild_id, instance, fire_at, replace_open, created_by, status, created_at, COALESCE(fired_at, 0)
-		 FROM scheduled_games WHERE status = ? AND fire_at <= ? ORDER BY fire_at LIMIT ?`,
+		`SELECT `+scheduledColumns+` FROM scheduled_games WHERE status = ? AND fire_at <= ? ORDER BY fire_at LIMIT ?`,
 		SchedPending, nowUnix, limit)
 	if err != nil {
 		return nil, err
@@ -149,15 +161,19 @@ func scanScheduled(rows *sql.Rows) ([]ScheduledGame, error) {
 	var out []ScheduledGame
 	for rows.Next() {
 		var (
-			sg   ScheduledGame
-			inst string
-			repl int
+			sg       ScheduledGame
+			poolJSON string
+			repl     int
 		)
-		if err := rows.Scan(&sg.ID, &sg.GuildID, &inst, &sg.FireAt, &repl, &sg.CreatedBy, &sg.Status, &sg.CreatedAt, &sg.FiredAt); err != nil {
+		if err := rows.Scan(&sg.ID, &sg.GuildID, &sg.Name, &poolJSON, &sg.FireAt, &repl, &sg.CreatedBy, &sg.Status, &sg.CreatedAt, &sg.FiredAt); err != nil {
 			return nil, err
 		}
-		sg.Instance = bingo.Instance(inst)
 		sg.ReplaceOpen = repl != 0
+		if poolJSON != "" {
+			if err := json.Unmarshal([]byte(poolJSON), &sg.PoolIDs); err != nil {
+				return nil, err
+			}
+		}
 		out = append(out, sg)
 	}
 	if err := rows.Err(); err != nil {

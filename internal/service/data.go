@@ -4,27 +4,26 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/Syndic0r/gw2-raid-bingo/internal/bingo"
 	"github.com/Syndic0r/gw2-raid-bingo/internal/store"
 )
 
 // All data operations are admin-gated here so neither the bot nor the web layer
 // can edit a guild's card texts without the check.
 
-// CreateSharedPool creates a named shared pool (admin only).
-func (s *Service) CreateSharedPool(ctx context.Context, guildID, userID, slug, name string) (store.Pool, error) {
+// CreatePool creates a named pool (admin only).
+func (s *Service) CreatePool(ctx context.Context, guildID, userID, slug, name string) (store.Pool, error) {
 	if err := s.requireAdmin(ctx, guildID, userID); err != nil {
 		return store.Pool{}, err
 	}
-	return s.store.CreateSharedPool(ctx, guildID, slug, name)
+	return s.store.CreatePool(ctx, guildID, slug, name)
 }
 
-// DeleteSharedPool removes a shared pool and its entries (admin only).
-func (s *Service) DeleteSharedPool(ctx context.Context, guildID, userID string, poolID int64) error {
+// DeletePool removes a pool and its entries (admin only). Every pool is deletable.
+func (s *Service) DeletePool(ctx context.Context, guildID, userID string, poolID int64) error {
 	if err := s.requireAdmin(ctx, guildID, userID); err != nil {
 		return err
 	}
-	return s.store.DeleteSharedPool(ctx, guildID, poolID)
+	return s.store.DeletePool(ctx, guildID, poolID)
 }
 
 // AddEntry adds a square to a pool (admin only).
@@ -67,39 +66,35 @@ type ImportResult struct {
 }
 
 // ImportData bulk-adds entries from parsed import data (admin only). Unlike the
-// home-guild seed it appends to whatever is there and never marks a seed guild,
-// so any server can seed itself from an exported template. Instance keys must be
-// valid instances; shared keys create shared pools on demand.
+// home-guild seed it appends to whatever is there and never marks a seed guild, so
+// any server can seed itself from an exported template. Both the `instance` and
+// `shared` buckets map to ordinary pools keyed by slug, created on demand.
 func (s *Service) ImportData(ctx context.Context, guildID, userID string, d store.SeedData) (ImportResult, error) {
 	if err := s.requireAdmin(ctx, guildID, userID); err != nil {
 		return ImportResult{}, err
 	}
 	var res ImportResult
-
-	for key, texts := range d.Instance {
-		inst, err := bingo.ParseInstance(key)
-		if err != nil {
-			return res, fmt.Errorf("import instance %q: %w", key, err)
-		}
-		pool, err := s.store.InstancePool(ctx, guildID, inst)
-		if err != nil {
-			return res, err
-		}
-		s.importInto(ctx, guildID, pool.ID, texts, &res)
-	}
-
-	for slug, texts := range d.Shared {
-		pool, err := s.store.GetPool(ctx, guildID, store.KindShared, slug)
-		if err == store.ErrNotFound {
-			pool, err = s.store.CreateSharedPool(ctx, guildID, slug, store.TitleCaseSlug(slug))
-			if err == nil {
-				res.PoolsMade++
+	importBucket := func(pools map[string][]string) error {
+		for slug, texts := range pools {
+			pool, err := s.store.GetPool(ctx, guildID, slug)
+			if err == store.ErrNotFound {
+				pool, err = s.store.CreatePool(ctx, guildID, slug, store.TitleCaseSlug(slug))
+				if err == nil {
+					res.PoolsMade++
+				}
 			}
+			if err != nil {
+				return fmt.Errorf("import pool %q: %w", slug, err)
+			}
+			s.importInto(ctx, guildID, pool.ID, texts, &res)
 		}
-		if err != nil {
-			return res, fmt.Errorf("import shared pool %q: %w", slug, err)
-		}
-		s.importInto(ctx, guildID, pool.ID, texts, &res)
+		return nil
+	}
+	if err := importBucket(d.Instance); err != nil {
+		return res, err
+	}
+	if err := importBucket(d.Shared); err != nil {
+		return res, err
 	}
 	return res, nil
 }

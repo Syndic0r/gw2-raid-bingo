@@ -7,11 +7,10 @@ and the web server over a shared store. The packages below are the core; the bot
 ## Packages (`app/internal/`)
 
 ### `bingo`
-Pure game domain, no I/O. Defines the nine playable instances (`w1`-`w8`,
-`htcm`), deals a 5x5 card from instance and shared entry pools (every instance
-entry guaranteed a place, the rest filled at random, free centre), and detects
-completed lines. All randomness is injected, so generation is deterministic and
-unit-tested.
+Pure game domain, no I/O. Deals a 5x5 card by sampling 24 squares uniformly at
+random from the union of the selected pools' entries (plus the free centre), and
+detects completed lines. All randomness is injected, so generation is
+deterministic and unit-tested.
 
 ### `authz`
 The single "is this member a bingo admin" rule, as a pure function shared by the
@@ -27,12 +26,15 @@ guild-scoped. Highlights:
 - Schema in `migrations/*.sql`, applied in order and recorded in
   `schema_migrations`. STRICT tables; foreign keys and WAL enabled per
   connection.
-- Guilds, settings, and configured admin roles; the nine instance pools are
-  created per guild automatically. Shared pools are guild-created.
+- Guilds, settings, and configured admin roles; eight blank wing pools
+  (`w1`-`w8`) are created for a new guild automatically. All pools are equal,
+  guild-editable, and deletable.
 - Entries are soft-deleted so historical cards, which snapshot their text, are
   never disturbed. Per-guild and per-pool caps bound abuse.
-- One open game per (guild, instance), enforced by a unique partial index.
-  Cards are dealt one per user per game.
+- A game is defined by the set of pools it draws from; its `pool_set_key` (the
+  canonical sorted pool-id set) is its identity. One open game per (guild,
+  pool-set), enforced by a unique partial index. Cards are dealt one per user per
+  game.
 - `CallBingo` finalizes a win in a single transaction guarded by
   `status = 'open'`, so the first caller wins any race and the game and all its
   cards become read-only.
@@ -40,7 +42,7 @@ guild-scoped. Highlights:
 ### `events`
 A small in-process publish/subscribe hub. Every state change is published once
 and fanned out to interested subscribers: the Discord live-message updater
-(global subscription) and the web server's SSE connections (per-instance topics).
+(global subscription) and the web server's SSE connections (per-game topics).
 Delivery is non-blocking so a slow subscriber never stalls a game.
 
 ### `config`

@@ -5,7 +5,10 @@
 // in Discord and the website in sync without any cross-process coordination.
 package events
 
-import "sync"
+import (
+	"strconv"
+	"sync"
+)
 
 // Kind enumerates the kinds of state change.
 type Kind string
@@ -20,17 +23,18 @@ const (
 
 // Event describes one state change. Fields not relevant to a Kind are zero.
 type Event struct {
-	Kind     Kind
-	GuildID  string
-	Instance string
-	GameID   int64
-	CardID   int64
-	UserID   string
+	Kind    Kind
+	GuildID string
+	GameID  int64
+	CardID  int64
+	UserID  string
 }
 
-// Topic groups events a subscriber cares about: everything for one instance in
-// one guild.
-func Topic(guildID, instance string) string { return guildID + ":" + instance }
+// Topic groups events a subscriber cares about: everything for one game in one
+// guild.
+func Topic(guildID string, gameID int64) string {
+	return guildID + ":" + strconv.FormatInt(gameID, 10)
+}
 
 // Hub fans events out to subscribers. It is safe for concurrent use.
 type Hub struct {
@@ -109,7 +113,7 @@ func (s *Subscription) Close() {
 // rather than stalling the game (SSE clients reconcile from a full fetch on
 // reconnect, and the Discord updater re-reads current state).
 func (h *Hub) Publish(e Event) {
-	topic := Topic(e.GuildID, e.Instance)
+	topic := Topic(e.GuildID, e.GameID)
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	for _, ch := range h.subs[topic] {
