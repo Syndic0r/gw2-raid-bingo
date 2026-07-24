@@ -244,20 +244,15 @@ func (s *Store) ListRecentGames(ctx context.Context, guildID string, limit int) 
 	return scanGames(rows)
 }
 
-func scanGames(rows *sql.Rows) ([]Game, error) {
-	var out []Game
-	for rows.Next() {
-		g, err := scanGameRows(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, g)
-	}
-	return out, rows.Err()
+// rowScanner is satisfied by both *sql.Row and *sql.Rows, so one scan helper serves the single-row
+// (GetGame) and multi-row (ListGames) query paths without duplicating the column list.
+type rowScanner interface {
+	Scan(dest ...any) error
 }
 
-// scanGameRows scans a game from a multi-row query.
-func scanGameRows(rows *sql.Rows) (Game, error) {
+// scanGameFrom scans a game's gameColumns from one row and unpacks its pool-id JSON. It does NOT
+// translate sql.ErrNoRows - single-row callers that need ErrNotFound do that themselves.
+func scanGameFrom(sc rowScanner) (Game, error) {
 	var (
 		g            Game
 		poolJSON     string
@@ -265,7 +260,7 @@ func scanGameRows(rows *sql.Rows) (Game, error) {
 		winnerUserID sql.NullString
 		winnerCardID sql.NullInt64
 	)
-	if err := rows.Scan(&g.ID, &g.GuildID, &g.Name, &g.PoolSetKey, &g.Status, &g.CreatedBy, &poolJSON,
+	if err := sc.Scan(&g.ID, &g.GuildID, &g.Name, &g.PoolSetKey, &g.Status, &g.CreatedBy, &poolJSON,
 		&g.CreatedAt, &finishedAt, &winnerUserID, &winnerCardID); err != nil {
 		return Game{}, err
 	}
@@ -280,6 +275,18 @@ func scanGameRows(rows *sql.Rows) (Game, error) {
 	return g, nil
 }
 
+func scanGames(rows *sql.Rows) ([]Game, error) {
+	var out []Game
+	for rows.Next() {
+		g, err := scanGameFrom(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, g)
+	}
+	return out, rows.Err()
+}
+
 // GetGame returns a game by id within a guild, or ErrNotFound.
 func (s *Store) GetGame(ctx context.Context, guildID string, gameID int64) (Game, error) {
 	return s.scanGame(s.db.QueryRowContext(ctx,
@@ -287,30 +294,11 @@ func (s *Store) GetGame(ctx context.Context, guildID string, gameID int64) (Game
 }
 
 func (s *Store) scanGame(row *sql.Row) (Game, error) {
-	var (
-		g            Game
-		poolJSON     string
-		finishedAt   sql.NullInt64
-		winnerUserID sql.NullString
-		winnerCardID sql.NullInt64
-	)
-	err := row.Scan(&g.ID, &g.GuildID, &g.Name, &g.PoolSetKey, &g.Status, &g.CreatedBy, &poolJSON,
-		&g.CreatedAt, &finishedAt, &winnerUserID, &winnerCardID)
+	g, err := scanGameFrom(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Game{}, ErrNotFound
 	}
-	if err != nil {
-		return Game{}, err
-	}
-	g.FinishedAt = finishedAt.Int64
-	g.WinnerUserID = winnerUserID.String
-	g.WinnerCardID = winnerCardID.Int64
-	if poolJSON != "" {
-		if err := json.Unmarshal([]byte(poolJSON), &g.PoolIDs); err != nil {
-			return Game{}, err
-		}
-	}
-	return g, nil
+	return g, err
 }
 
 // GetOrDealCard returns the user's card for a game, dealing a new one if they
